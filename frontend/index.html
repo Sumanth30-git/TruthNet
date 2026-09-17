@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TruthNet | Multimodal Content Analysis</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="#news" aria-label="TruthNet home">TRUTH<span>NET</span></a>
+    <nav aria-label="Main navigation">
+      <button class="nav-link active" data-tab="news">News Analysis</button>
+      <button class="nav-link" data-tab="image">Image Analysis</button>
+      <button class="nav-link" data-tab="video">Video Analysis <small>Coming Soon</small></button>
+    </nav>
+    <p id="health-status" class="health-status">Checking service…</p>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <p class="eyebrow">AI-POWERED MULTIMODAL FAKE CONTENT DETECTION</p>
+      <h1>Evidence first. <em>Certainty earned.</em></h1>
+      <p>TruthNet presents model signals, evidence and limitations—rather than treating a single confidence score as truth.</p>
+    </section>
+
+    <section id="news" class="panel tab-panel active">
+      <div class="section-heading"><div><p class="eyebrow">NEWS / TEXT</p><h2>Analyze a news claim</h2></div><p>Classifier signal only · not live fact verification</p></div>
+      <label for="news-text">Headline, article excerpt, or claim</label>
+      <textarea id="news-text" maxlength="10000" placeholder="Paste a claim or news text…"></textarea>
+      <button id="news-submit" class="primary-button">Analyze text</button>
+      <div id="news-result" class="result hidden" aria-live="polite"></div>
+    </section>
+
+    <section id="image" class="panel tab-panel">
+      <div class="section-heading"><div><p class="eyebrow">IMAGE</p><h2>Analyze an image</h2></div><p>JPEG, PNG or WebP · Max 10 MB</p></div>
+      <div id="drop-zone" class="drop-zone">
+        <input id="image-input" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+        <button id="choose-image" class="secondary-button">Choose image</button>
+        <p>or drag and drop an image here</p>
+        <img id="image-preview" class="image-preview hidden" alt="Selected image preview">
+      </div>
+      <div class="actions"><p id="image-status" aria-live="polite">No image selected.</p><button id="image-submit" class="primary-button" disabled>Start analysis</button></div>
+      <div id="image-result" class="result hidden" aria-live="polite"></div>
+    </section>
+
+    <section id="video" class="panel tab-panel">
+      <p class="eyebrow">VIDEO</p><h2>Video analysis is planned</h2>
+      <p>TruthNet V2 has a future API extension point for video, but does not perform video detection in Phase 0.</p>
+      <button id="video-submit" class="secondary-button">Check video capability</button>
+      <div id="video-result" class="result hidden" aria-live="polite"></div>
+    </section>
+  </main>
+  <footer>TruthNet V2 · Analysis results are evidence signals, not proof of truth or authenticity.</footer>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
