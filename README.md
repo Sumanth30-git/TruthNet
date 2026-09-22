@@ -86,13 +86,13 @@ python -m uvicorn backend.main:app --reload
 
 If the optional Transformer runtime is unavailable, enabled model calls return a safe `failed` signal rather than a fabricated result.
 
-## Controlled local news smoke test
+## Controlled local model smoke tests
 
 Phase 1D adds the minimum pinned news-model runtime dependencies: `transformers==4.57.6` and `torch==2.14.0`. The selected versions have installable CPython 3.14 Windows wheels and retain the stable Transformers 4.x API used by the existing adapter.
 
-The standalone smoke test is deliberately outside the normal pytest suite. It uses the existing `jy46604790/Fake-News-Bert-Detect` adapter, may download its model weights on first use, and verifies that the resulting API-style response remains `inconclusive` while its individual signal completes.
+The standalone smoke tests are deliberately outside the normal pytest suite. They may download model weights on first use and verify that the resulting response remains `inconclusive` while the individual model signal completes.
 
-Run it only with non-sensitive text and explicit inference enablement:
+The news smoke test uses the existing `jy46604790/Fake-News-Bert-Detect` adapter. Run it only with non-sensitive text and explicit inference enablement:
 
 ```powershell
 $env:MODEL_INFERENCE_ENABLED = "true"
@@ -100,6 +100,15 @@ python scripts\smoke_news.py
 ```
 
 The default smoke-test input is a harmless public-style sentence. You may supply another non-sensitive test sentence with `--text`.
+
+Phase 1E adds a controlled real local AI-image smoke test for the existing `capcheck/ai-human-generated-image-detection` adapter. It requires an explicit path to a local JPEG, PNG, or WebP image and submits it to `/api/image/analyze`, so the normal upload validation, in-memory RGB normalization, and image pipeline all run. Do not use sensitive images.
+
+```powershell
+$env:MODEL_INFERENCE_ENABLED = "true"
+python scripts\smoke_image.py --image C:\path\to\local-image.jpg
+```
+
+The image smoke test prints the structured API response, including the original model label, mapped prediction, raw score, signal status, inference time, and final `inconclusive` verdict.
 
 ## Tests
 
