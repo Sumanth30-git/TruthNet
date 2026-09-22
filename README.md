@@ -35,6 +35,7 @@ The browser never runs ML inference. The backend owns validation, inference flag
 - A flag-gated news baseline adapter for `jy46604790/Fake-News-Bert-Detect`.
 - A flag-gated AI-image baseline adapter for `capcheck/ai-human-generated-image-detection`.
 - Server-side image decoding and validation for JPEG, PNG, and WebP files up to 10 MB; corrupt files, MIME mismatches, oversized dimensions, and excessive pixel counts are rejected. Images are normalized to RGB in memory only.
+- A classical face-quality gate that reports usable faces, absent faces, low-quality faces, or detector failure as an independent image signal. It uses a minimum detected face width and height of 80 pixels; this is a processing threshold, not identity verification or a deepfake result.
 - Stable response schema with verdict, confidence, uncertainty, signals, evidence, limitations, and model versions.
 - Lazy model adapters and a registry that report model readiness without loading weights at application startup.
 - Safe structured API errors with a request ID; diagnostic details remain in server logs.
@@ -46,7 +47,7 @@ The browser never runs ML inference. The backend owns validation, inference flag
 | --- | --- | --- |
 | `/api/health` | GET | Reports application health, whether inference is enabled, and lazy-model readiness. |
 | `/api/news/analyze` | POST | Accepts `{ "text": "..." }`; reports the news baseline signal when enabled, otherwise a `not_run` signal. Final verdict remains `inconclusive`. |
-| `/api/image/analyze` | POST | Accepts multipart field `image`; validates it and reports the AI-image baseline signal when enabled, otherwise a `not_run` signal. Final verdict remains `inconclusive`. |
+| `/api/image/analyze` | POST | Accepts multipart field `image`; validates it, reports an independent face-quality signal, and reports the AI-image baseline signal when enabled (otherwise `not_run`). Final verdict remains `inconclusive`. |
 | `/api/video/analyze` | POST | Returns `not_implemented`; no video ML runs. |
 
 The frontend renders the response contract and contains no ML inference logic. It displays each signal's model ID, prediction, status, raw score when available, inference time when available, and API-provided limitations. `backend/schemas.py` is the single source of truth for result responses.
@@ -121,7 +122,6 @@ Tests keep `MODEL_INFERENCE_ENABLED=false` and use mocks for model-output paths,
 ## Not implemented yet
 
 - Deepfake detection is not integrated into the image pipeline.
-- `FaceQualityGate` is not integrated into the image pipeline.
 - Evidence fusion or evidence aggregation is not implemented.
 - Metadata/provenance and forensic analysis are not implemented.
 - Live news verification, source retrieval, claim extraction, and claim-evidence analysis are not implemented.

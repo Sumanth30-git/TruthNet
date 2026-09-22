@@ -4,7 +4,22 @@ from time import perf_counter
 
 from PIL import Image
 
+from backend.config import (
+    FACE_DETECTION_MIN_NEIGHBORS,
+    FACE_DETECTION_MIN_SIZE_PX,
+    FACE_DETECTION_SCALE_FACTOR,
+    FACE_QUALITY_MIN_DIMENSION_PX,
+)
 from backend.schemas import SignalStatus
+
+
+@dataclass(frozen=True)
+class FaceBoundingBox:
+    x: int
+    y: int
+    width: int
+    height: int
+    usable: bool
 
 
 @dataclass(frozen=True)
@@ -14,6 +29,7 @@ class FaceGateResult:
     usable_faces: int
     status: SignalStatus
     inference_time_ms: float | None
+    faces: tuple[FaceBoundingBox, ...] = ()
     message: str | None = None
 
 
@@ -48,17 +64,31 @@ class FaceQualityGate:
             grayscale = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2GRAY)
             faces = self._load_cascade().detectMultiScale(
                 grayscale,
-                scaleFactor=1.1,
-                minNeighbors=5,
-                minSize=(32, 32),
+                scaleFactor=FACE_DETECTION_SCALE_FACTOR,
+                minNeighbors=FACE_DETECTION_MIN_NEIGHBORS,
+                minSize=(FACE_DETECTION_MIN_SIZE_PX, FACE_DETECTION_MIN_SIZE_PX),
             )
-            usable_faces = sum(width >= 80 and height >= 80 for _, _, width, height in faces)
+            face_boxes = tuple(
+                FaceBoundingBox(
+                    x=int(x),
+                    y=int(y),
+                    width=int(width),
+                    height=int(height),
+                    usable=(
+                        width >= FACE_QUALITY_MIN_DIMENSION_PX
+                        and height >= FACE_QUALITY_MIN_DIMENSION_PX
+                    ),
+                )
+                for x, y, width, height in faces
+            )
+            usable_faces = sum(face.usable for face in face_boxes)
             return FaceGateResult(
                 usable_face=usable_faces > 0,
-                faces_detected=len(faces),
+                faces_detected=len(face_boxes),
                 usable_faces=usable_faces,
                 status=SignalStatus.COMPLETE,
                 inference_time_ms=round((perf_counter() - started) * 1000, 2),
+                faces=face_boxes,
             )
         except Exception:
             return FaceGateResult(

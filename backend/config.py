@@ -7,6 +7,11 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_WIDTH = 4_096
 MAX_IMAGE_HEIGHT = 4_096
 MAX_IMAGE_PIXELS = 12_000_000
+# Haar-cascade detector parameters and the minimum size for a usable face gate.
+FACE_DETECTION_SCALE_FACTOR = 1.1
+FACE_DETECTION_MIN_NEIGHBORS = 5
+FACE_DETECTION_MIN_SIZE_PX = 32
+FACE_QUALITY_MIN_DIMENSION_PX = 80
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 IMAGE_TYPE_TO_FORMAT = {
     "image/jpeg": "JPEG",
