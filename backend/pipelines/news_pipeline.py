@@ -6,12 +6,16 @@ from backend.fusion.decision import inconclusive_result
 from backend.models.base import BaseModelAdapter
 from backend.models.registry import ModelRegistry, registry
 from backend.schemas import AnalysisResponse, ContentType, SignalResult, SignalStatus
+from backend.schemas import EvidenceAnalysisStatus
+from backend.services.evidence_analysis import evidence_analysis, extract_candidate_claims
+from backend.services.news_search import news_search
 
 logger = logging.getLogger(__name__)
 
 NEWS_LIMITATIONS = [
     "This is a single text-classifier signal, not live claim verification.",
-    "No source retrieval, claim extraction, or evidence verification has run.",
+    "Claims are simple sentence candidates; NLI assesses source-text/claim relation, not factual truth or source credibility.",
+    "Evidence fusion has not run, so the final verdict remains inconclusive.",
     "Raw model scores are not calibrated probabilities or factual certainty.",
 ]
 
@@ -59,9 +63,26 @@ def analyze_news(text: str, model_registry: ModelRegistry = registry) -> Analysi
                 details={"message": "Model inference is currently unavailable."},
             )
 
-    return inconclusive_result(
+    response = inconclusive_result(
         "This is an individual text-classifier signal, not live claim verification.",
         [signal],
         model_versions=[adapter.metadata],
         limitations=NEWS_LIMITATIONS,
     )
+    # Sentence segmentation creates candidate claims, not semantically verified claims.
+    response.claims = extract_candidate_claims(text)
+    try:
+        response.search = news_search.search(text)
+    except Exception:
+        logger.warning("News search failed")
+        response.search = None
+        response.evidence_analysis_status = EvidenceAnalysisStatus.UNAVAILABLE
+        return response
+
+    if response.search.status == "complete":
+        response.evidence, response.evidence_analysis_status = evidence_analysis.analyze(
+            response.claims, response.search.results
+        )
+    elif response.search.status in {"failed", "unavailable"}:
+        response.evidence_analysis_status = EvidenceAnalysisStatus.UNAVAILABLE
+    return response

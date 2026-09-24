@@ -33,6 +33,8 @@ The browser never runs ML inference. The backend owns validation, inference flag
 - `GET /api/health` health endpoint.
 - `MODEL_INFERENCE_ENABLED` defaults to `false` for safe local development and test execution.
 - A flag-gated news baseline adapter for `jy46604790/Fake-News-Bert-Detect`.
+- A provider-independent News `SearchProvider` contract and a Tavily current-web search provider that returns typed source candidates and safely handles failures. Search remains disabled by default (`NEWS_SEARCH_PROVIDER=none`).
+- A replaceable News evidence-analysis boundary using `cross-encoder/nli-deberta-v3-base` for source-text/claim stance when model inference is explicitly enabled. It emits structured NLI signals and never treats source identity or NLI output as proof of truth.
 - A flag-gated AI-image baseline adapter for `capcheck/ai-human-generated-image-detection`.
 - Server-side image decoding and validation for JPEG, PNG, and WebP files up to 10 MB; corrupt files, MIME mismatches, oversized dimensions, and excessive pixel counts are rejected. Images are normalized to RGB in memory only.
 - A classical face-quality gate that reports usable faces, absent faces, low-quality faces, or detector failure as an independent image signal. It uses a minimum detected face width and height of 80 pixels; this is a processing threshold, not identity verification or a deepfake result.
@@ -46,7 +48,7 @@ The browser never runs ML inference. The backend owns validation, inference flag
 | Endpoint | Method | Current behavior |
 | --- | --- | --- |
 | `/api/health` | GET | Reports application health, whether inference is enabled, and lazy-model readiness. |
-| `/api/news/analyze` | POST | Accepts `{ "text": "..." }`; reports the news baseline signal when enabled, otherwise a `not_run` signal. Final verdict remains `inconclusive`. |
+| `/api/news/analyze` | POST | Accepts `{ "text": "..." }`; reports the news baseline signal when enabled, sentence-level candidate claims, search status/candidates, and structured evidence analysis status. Final verdict remains `inconclusive`. |
 | `/api/image/analyze` | POST | Accepts multipart field `image`; validates it, reports an independent face-quality signal, and reports the AI-image baseline signal when enabled (otherwise `not_run`). Final verdict remains `inconclusive`. |
 | `/api/video/analyze` | POST | Returns `not_implemented`; no video ML runs. |
 
@@ -56,7 +58,15 @@ The frontend renders the response contract and contains no ML inference logic. I
 
 ### News
 
-The news baseline preserves the V1 model mapping: `LABEL_0` is reported as `fake_news` and `LABEL_1` as `real_news`. This is a text-classifier signal only; it is **not** live fact verification. No claim extraction, trusted-source retrieval, or supporting/contradicting evidence analysis runs today.
+The news baseline preserves the V1 model mapping: `LABEL_0` is reported as `fake_news` and `LABEL_1` as `real_news`. This is a text-classifier signal only; it is **not** live fact verification. The search layer defines an injectable `SearchProvider` contract and includes a Tavily adapter for current-web source candidates. The default is `NEWS_SEARCH_PROVIDER=none`, which returns `search.status = "not_configured"`; set it to `tavily` to enable requests.
+
+The evidence layer treats a single input sentence as one candidate claim and splits multiple sentences at terminal punctuation. This is simple deterministic segmentation, not semantic claim extraction. It creates evidence records tied to each claim and source, preserving source title, URL, publisher, publication date, and retrieval time. When `MODEL_INFERENCE_ENABLED=true`, the lazy NLI adapter evaluates retrieved source text as the **premise** and the submitted claim as the **hypothesis** using `cross-encoder/nli-deberta-v3-base`. Its model-label mapping is `0 → contradiction → contradicts`, `1 → entailment → supports`, and `2 → neutral → neutral`. Every evidence record preserves the predicted label, all three softmax probabilities, selected confidence, model ID, status, inference time, and whether source text was truncated.
+
+NLI describes the textual relationship between a source excerpt and a claim. It is not independent fact verification, source credibility assessment, or proof that either statement is true. Relevance remains separately `not_assessed`; no publisher or domain rule influences stance. Before tokenization, source text is deterministically capped by `NEWS_NLI_MAX_SOURCE_CHARS` (default 6000 characters), then the premise/hypothesis pair is tokenized with truncation to `NEWS_NLI_MAX_TOKENS` (default 512, the model maximum). This bounds web-content inputs while retaining each evidence record's source relationship. The final verdict remains `inconclusive` regardless of search or NLI output because evidence fusion is not implemented.
+
+Search configuration is explicit: `NEWS_SEARCH_PROVIDER` defaults to `none`; `NEWS_SEARCH_TIMEOUT_SECONDS` defaults to `5` seconds (accepted range greater than 0 and at most 60); `NEWS_SEARCH_MAX_RESULTS` defaults to `5` (range 1–20); and Tavily reads its credential only from `TAVILY_API_KEY`. If Tavily is selected without that key, search returns an unavailable status. No key is required for tests.
+
+NLI configuration is also explicit: `NEWS_NLI_MODEL_ID` defaults to `cross-encoder/nli-deberta-v3-base`, `NEWS_NLI_MAX_TOKENS` defaults to `512`, and `NEWS_NLI_MAX_SOURCE_CHARS` defaults to `6000`. The NLI tokenizer and model are not imported or loaded at application startup and are not loaded while `MODEL_INFERENCE_ENABLED=false`. The adapter uses CUDA when PyTorch reports availability and otherwise runs on CPU.
 
 ### AI images
 
@@ -100,6 +110,15 @@ $env:MODEL_INFERENCE_ENABLED = "true"
 python scripts\smoke_news.py
 ```
 
+To manually run the NLI stance smoke test (it may download the NLI model on first use):
+
+```powershell
+$env:MODEL_INFERENCE_ENABLED = "true"
+python scripts\smoke_nli.py
+```
+
+It exercises entailment, contradiction, and neutral examples and prints the device, fixed label mapping, prediction, probabilities, and inference time.
+
 The default smoke-test input is a harmless public-style sentence. You may supply another non-sensitive test sentence with `--text`.
 
 Phase 1E adds a controlled real local AI-image smoke test for the existing `capcheck/ai-human-generated-image-detection` adapter. It requires an explicit path to a local JPEG, PNG, or WebP image and submits it to `/api/image/analyze`, so the normal upload validation, in-memory RGB normalization, and image pipeline all run. Do not use sensitive images.
@@ -124,7 +143,10 @@ Tests keep `MODEL_INFERENCE_ENABLED=false` and use mocks for model-output paths,
 - Deepfake detection is not integrated into the image pipeline.
 - Evidence fusion or evidence aggregation is not implemented.
 - Metadata/provenance and forensic analysis are not implemented.
-- Live news verification, source retrieval, claim extraction, and claim-evidence analysis are not implemented.
+- Advanced multi-claim extraction and source relevance assessment are not implemented.
+- Source relevance assessment and source credibility reasoning are not implemented.
+- Evidence fusion, current-news final verification, a final Real/Fake decision from web evidence, and final explanation generation are not implemented.
+- Frontend evidence presentation is not implemented.
 - Video ML analysis is not implemented; the video endpoint is a clear placeholder only.
 - No accuracy-improvement or benchmark-performance claim has been made.
 
