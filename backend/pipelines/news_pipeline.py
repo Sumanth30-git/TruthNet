@@ -2,7 +2,7 @@ import logging
 from typing import Any
 
 from backend.config import model_inference_enabled
-from backend.fusion.decision import inconclusive_result
+from backend.fusion.decision import decide_news_verdict, inconclusive_result
 from backend.models.base import BaseModelAdapter
 from backend.models.registry import ModelRegistry, registry
 from backend.schemas import AnalysisResponse, ContentType, EvidenceQuality, SignalResult, SignalStatus
@@ -44,6 +44,38 @@ def _news_signal(
         inference_time_ms=inference_time_ms,
         details=details or {},
     )
+
+
+def _unavailable_claim_ids(response: AnalysisResponse) -> frozenset[str]:
+    return frozenset(
+        item.claim_id
+        for item in response.evidence
+        if item.claim_id is not None and item.analysis_status == EvidenceAnalysisStatus.UNAVAILABLE
+    )
+
+
+def _apply_news_verdict(response: AnalysisResponse, *, aggregation_succeeded: bool) -> AnalysisResponse:
+    """Apply the existing News decision policy without recalculating evidence."""
+
+    search_status = None if response.search is None else response.search.status
+    decision = decide_news_verdict(
+        response.claims,
+        response.evidence_summaries,
+        search_status=search_status,
+        evidence_analysis_status=response.evidence_analysis_status,
+        aggregation_succeeded=aggregation_succeeded,
+        unavailable_claim_ids=_unavailable_claim_ids(response),
+        signals=response.signals,
+    )
+    response.verdict = decision.verdict
+    response.confidence = decision.confidence
+    response.uncertainty = decision.uncertainty
+    response.message = decision.reason
+    stale_limitation = "Evidence fusion has not run, so the final verdict remains inconclusive."
+    response.limitations = [item for item in response.limitations if item != stale_limitation]
+    if decision.reason not in response.limitations:
+        response.limitations.append(decision.reason)
+    return response
 
 
 def _attach_evidence_quality(response: AnalysisResponse) -> None:
@@ -121,13 +153,14 @@ def analyze_news(text: str, model_registry: ModelRegistry = registry) -> Analysi
     )
     # Sentence segmentation creates candidate claims, not semantically verified claims.
     response.claims = extract_candidate_claims(text)
+    aggregation_succeeded = False
     try:
         response.search = news_search.search(text)
     except Exception:
         logger.warning("News search failed")
         response.search = None
         response.evidence_analysis_status = EvidenceAnalysisStatus.UNAVAILABLE
-        return response
+        return _apply_news_verdict(response, aggregation_succeeded=False)
 
     if response.search.status == "complete":
         response.evidence, response.evidence_analysis_status = evidence_analysis.analyze(
@@ -139,11 +172,11 @@ def analyze_news(text: str, model_registry: ModelRegistry = registry) -> Analysi
             response.evidence_summaries = evidence_aggregation.aggregate(
                 response.claims, response.evidence
             )
+            aggregation_succeeded = True
         except Exception:
-            # Aggregation must not affect the existing verdict path or turn a
-            # failed aggregation into support or contradiction.
+            # Aggregation must not independently invent support or contradiction.
             logger.warning("Evidence aggregation failed", exc_info=True)
             response.evidence_summaries = []
     elif response.search.status in {"failed", "unavailable"}:
         response.evidence_analysis_status = EvidenceAnalysisStatus.UNAVAILABLE
-    return response
+    return _apply_news_verdict(response, aggregation_succeeded=aggregation_succeeded)

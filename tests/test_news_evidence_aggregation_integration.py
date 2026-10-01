@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from backend.fusion.decision import decide_news_verdict
 from backend.schemas import (
     EvidenceAnalysisStatus,
     EvidenceStance,
@@ -118,7 +119,17 @@ def test_news_pipeline_aggregates_enriched_evidence_per_claim(monkeypatch: pytes
     assert [summary.claim_id for summary in response.evidence_summaries] == ["claim-1", "claim-2"]
     assert all(summary.support_weight > 0 for summary in response.evidence_summaries)
     assert all(summary.contradiction_weight > 0 for summary in response.evidence_summaries)
-    assert response.verdict == Verdict.INCONCLUSIVE
+    expected = decide_news_verdict(
+        response.claims,
+        response.evidence_summaries,
+        search_status=response.search.status if response.search is not None else None,
+        evidence_analysis_status=response.evidence_analysis_status,
+        aggregation_succeeded=True,
+        signals=response.signals,
+    )
+    assert response.verdict == expected.verdict
+    assert response.confidence is None
+    assert response.uncertainty == expected.uncertainty
 
 
 def test_news_pipeline_handles_aggregation_failure_without_changing_evidence_or_verdict(
