@@ -5,10 +5,13 @@ from backend.config import model_inference_enabled
 from backend.fusion.decision import inconclusive_result
 from backend.models.base import BaseModelAdapter
 from backend.models.registry import ModelRegistry, registry
-from backend.schemas import AnalysisResponse, ContentType, SignalResult, SignalStatus
+from backend.schemas import AnalysisResponse, ContentType, EvidenceQuality, SignalResult, SignalStatus
 from backend.schemas import EvidenceAnalysisStatus
 from backend.services.evidence_analysis import evidence_analysis, extract_candidate_claims
+from backend.services.claim_understanding import claim_understanding
+from backend.services.evidence_matching import evidence_matching
 from backend.services.news_search import news_search
+from backend.services.source_quality import source_quality
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +43,52 @@ def _news_signal(
         inference_time_ms=inference_time_ms,
         details=details or {},
     )
+
+
+def _attach_evidence_quality(response: AnalysisResponse) -> None:
+    """Attach deterministic source and claim matching metadata to evidence items.
+
+    Evidence analysis remains responsible for constructing the candidate items and
+    its stance/relevance fields. This step only adds the Phase 3E source-quality
+    and matching outputs for the corresponding claim/source pair.
+    """
+    if response.search is None:
+        return
+
+    claims_by_id = {claim.claim_id: claim for claim in response.claims}
+    contexts = claim_understanding.understand_claims(response.claims)
+    for context in contexts:
+        claim = claims_by_id.get(context.claim_id)
+        if claim is not None:
+            claim.context = context
+
+    items_by_pair: dict[tuple[str | None, str | None], list] = {}
+    for item in response.evidence:
+        items_by_pair.setdefault((item.claim_id, item.source_url), []).append(item)
+
+    for context in contexts:
+        for source in response.search.results:
+            items = items_by_pair.get((context.claim_id, source.url), [])
+            try:
+                profile = source_quality.profile(source, claim_context=context)
+                match = evidence_matching.match(context, source)
+                freshness = evidence_matching.freshness(context, source)
+            except Exception:
+                # Matching metadata must never turn a retrieved source into a
+                # finding or discard the conservative evidence-analysis result.
+                logger.warning("Evidence matching failed for claim/source candidate", exc_info=True)
+                continue
+
+            for item in items:
+                existing_quality = item.evidence_quality
+                item.evidence_quality = EvidenceQuality(
+                    source_profile=profile,
+                    match=match,
+                    numerical_check=(
+                        existing_quality.numerical_check if existing_quality is not None else None
+                    ),
+                    freshness=freshness,
+                )
 
 
 def analyze_news(text: str, model_registry: ModelRegistry = registry) -> AnalysisResponse:
@@ -83,6 +132,7 @@ def analyze_news(text: str, model_registry: ModelRegistry = registry) -> Analysi
         response.evidence, response.evidence_analysis_status = evidence_analysis.analyze(
             response.claims, response.search.results
         )
+        _attach_evidence_quality(response)
     elif response.search.status in {"failed", "unavailable"}:
         response.evidence_analysis_status = EvidenceAnalysisStatus.UNAVAILABLE
     return response
