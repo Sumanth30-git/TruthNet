@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 class Verdict(str, Enum):
     LIKELY_AUTHENTIC = "likely_authentic"
+    LIKELY_FAKE_NEWS = "likely_fake_news"
     LIKELY_AI_GENERATED = "likely_ai_generated"
     LIKELY_MANIPULATED = "likely_manipulated"
     INCONCLUSIVE = "inconclusive"
