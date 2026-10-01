@@ -9,6 +9,7 @@ from backend.schemas import AnalysisResponse, ContentType, EvidenceQuality, Sign
 from backend.schemas import EvidenceAnalysisStatus
 from backend.services.evidence_analysis import evidence_analysis, extract_candidate_claims
 from backend.services.claim_understanding import claim_understanding
+from backend.services.evidence_aggregation import evidence_aggregation
 from backend.services.evidence_matching import evidence_matching
 from backend.services.news_search import news_search
 from backend.services.source_quality import source_quality
@@ -133,6 +134,16 @@ def analyze_news(text: str, model_registry: ModelRegistry = registry) -> Analysi
             response.claims, response.search.results
         )
         _attach_evidence_quality(response)
+        try:
+            response.evidence = evidence_aggregation.prepare(response.evidence)
+            response.evidence_summaries = evidence_aggregation.aggregate(
+                response.claims, response.evidence
+            )
+        except Exception:
+            # Aggregation must not affect the existing verdict path or turn a
+            # failed aggregation into support or contradiction.
+            logger.warning("Evidence aggregation failed", exc_info=True)
+            response.evidence_summaries = []
     elif response.search.status in {"failed", "unavailable"}:
         response.evidence_analysis_status = EvidenceAnalysisStatus.UNAVAILABLE
     return response
