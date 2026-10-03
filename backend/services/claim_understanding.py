@@ -10,8 +10,9 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from datetime import date
+from typing import Protocol
 
-from backend.schemas import Claim, ClaimContext, ClaimNumber, ClaimType
+from backend.schemas import Claim, ClaimContext, ClaimNumber, ClaimType, ClaimUnderstandingMetadata
 
 
 _NUMBER_PATTERN = r"(?:\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)"
@@ -515,6 +516,10 @@ def understand_claim(claim: Claim | str, *, claim_id: str | None = None) -> Clai
             claim_id=resolved_claim_id,
             factual_statement="",
             extraction_notes=["No claim text was available for deterministic parsing."],
+            understanding_metadata=ClaimUnderstandingMetadata(
+                method="deterministic_claim_understanding",
+                status="complete",
+            ),
         )
 
     numbers, attributes = _extract_numbers(text)
@@ -533,6 +538,10 @@ def understand_claim(claim: Claim | str, *, claim_id: str | None = None) -> Clai
         numerical_values=numbers,
         relevant_attributes=attributes,
         extraction_notes=notes,
+        understanding_metadata=ClaimUnderstandingMetadata(
+            method="deterministic_claim_understanding",
+            status="complete",
+        ),
     )
 
 
@@ -553,8 +562,18 @@ def understand_claims(claims: Sequence[Claim] | str | object) -> list[ClaimConte
     return contexts
 
 
-class ClaimUnderstandingService:
-    """Small service boundary used by the news pipeline and focused unit tests."""
+class ClaimUnderstandingAdapter(Protocol):
+    """Boundary for a future NLP implementation or deterministic fallback."""
+
+    def extract_claims(self, text: object) -> list[Claim]: ...
+
+    def understand_claim(self, claim: Claim | str, *, claim_id: str | None = None) -> ClaimContext: ...
+
+    def understand_claims(self, claims: Sequence[Claim] | str | object) -> list[ClaimContext]: ...
+
+
+class DeterministicClaimUnderstandingAdapter:
+    """Current conservative implementation used until an evaluated NLP adapter exists."""
 
     def extract_claims(self, text: object) -> list[Claim]:
         return extract_claims(text)
@@ -564,6 +583,22 @@ class ClaimUnderstandingService:
 
     def understand_claims(self, claims: Sequence[Claim] | str | object) -> list[ClaimContext]:
         return understand_claims(claims)
+
+
+class ClaimUnderstandingService:
+    """Small service boundary used by the news pipeline and focused unit tests."""
+
+    def __init__(self, adapter: ClaimUnderstandingAdapter | None = None) -> None:
+        self._adapter = adapter or DeterministicClaimUnderstandingAdapter()
+
+    def extract_claims(self, text: object) -> list[Claim]:
+        return self._adapter.extract_claims(text)
+
+    def understand_claim(self, claim: Claim | str, *, claim_id: str | None = None) -> ClaimContext:
+        return self._adapter.understand_claim(claim, claim_id=claim_id)
+
+    def understand_claims(self, claims: Sequence[Claim] | str | object) -> list[ClaimContext]:
+        return self._adapter.understand_claims(claims)
 
 
 claim_understanding = ClaimUnderstandingService()

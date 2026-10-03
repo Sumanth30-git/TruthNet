@@ -184,6 +184,53 @@ class ClaimNumber(BaseModel):
     attribute: str | None = None
 
 
+class EntityType(str, Enum):
+    PERSON = "person"
+    ORGANIZATION = "organization"
+    LOCATION = "location"
+    COUNTRY = "country"
+    PRODUCT = "product"
+    EVENT = "event"
+    OTHER = "other"
+
+
+class EntityMention(BaseModel):
+    """Internal structured extraction for one text-supported entity mention."""
+
+    text: str
+    entity_type: EntityType
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+    normalized_text: str | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    status: str | None = None
+
+
+class ClaimRelation(BaseModel):
+    """Internal structured extraction for a text-supported claim relation."""
+
+    subject_text: str | None = None
+    predicate: str | None = None
+    object_text: str | None = None
+    relation_type: str | None = None
+    entity_indexes: list[int] | None = None
+    negated: bool | None = None
+    modality: str | None = None
+    qualifiers: list[str] = Field(default_factory=list)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+
+
+class ClaimUnderstandingMetadata(BaseModel):
+    """Processing provenance for Claim Understanding, not factual confidence."""
+
+    method: str
+    status: str
+    reason: str | None = None
+    model_id: str | None = None
+    model_version: str | None = None
+    inference_time_ms: float | None = Field(default=None, ge=0)
+
+
 class ClaimContext(BaseModel):
     claim_id: str
     factual_statement: str
@@ -195,6 +242,13 @@ class ClaimContext(BaseModel):
     numerical_values: list[ClaimNumber] = Field(default_factory=list)
     relevant_attributes: dict[str, str] = Field(default_factory=dict)
     extraction_notes: list[str] = Field(default_factory=list)
+    # These fields are internal-compatible additions. Existing downstream
+    # services continue to consume the scalar fields above.
+    entity_mentions: list[EntityMention] = Field(default_factory=list)
+    relations: list[ClaimRelation] = Field(default_factory=list)
+    understanding_metadata: ClaimUnderstandingMetadata | None = None
+    is_atomic_claim: bool | None = None
+    is_verifiable_claim: bool | None = None
 
 
 class SourceProfile(BaseModel):

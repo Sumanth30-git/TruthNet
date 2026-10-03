@@ -1,4 +1,12 @@
-from backend.schemas import Claim, ClaimType
+from backend.schemas import (
+    Claim,
+    ClaimContext,
+    ClaimRelation,
+    ClaimType,
+    ClaimUnderstandingMetadata,
+    EntityMention,
+    EntityType,
+)
 from backend.services.claim_understanding import (
     ClaimUnderstandingService,
     extract_claims,
@@ -98,3 +106,67 @@ def test_text_api_and_service_boundary_are_safe_for_empty_input():
     empty = service.understand_claim(" ", claim_id="claim-empty")
     assert empty.claim_id == "claim-empty"
     assert empty.claim_type == ClaimType.UNKNOWN
+
+
+def test_additive_nlp_contract_defaults_are_empty_or_unassessed():
+    context = ClaimContext(claim_id="claim-1", factual_statement="A claim.")
+
+    assert context.entity_mentions == []
+    assert context.relations == []
+    assert context.understanding_metadata is None
+    assert context.is_atomic_claim is None
+    assert context.is_verifiable_claim is None
+
+
+def test_additive_entity_relation_and_metadata_contracts_are_conservative():
+    entity = EntityMention(
+        text="Acme",
+        entity_type=EntityType.ORGANIZATION,
+        start=0,
+        end=4,
+        normalized_text="acme",
+        confidence=0.8,
+        status="complete",
+    )
+    relation = ClaimRelation(subject_text="Acme", predicate=None, qualifiers=["reported"])
+    metadata = ClaimUnderstandingMetadata(
+        method="deterministic_claim_understanding",
+        status="complete",
+    )
+
+    context = ClaimContext(
+        claim_id="claim-1",
+        factual_statement="Acme reported an update.",
+        entity_mentions=[entity],
+        relations=[relation],
+        understanding_metadata=metadata,
+    )
+
+    assert context.entity_mentions == [entity]
+    assert context.relations == [relation]
+    assert context.relations[0].predicate is None
+    assert context.understanding_metadata == metadata
+    assert context.understanding_metadata.model_id is None
+    assert context.understanding_metadata.model_version is None
+
+
+def test_deterministic_context_has_metadata_without_invented_nlp_structure():
+    context = understand_claim(Claim(claim_id="claim-1", text="Acme launched Product Y today."))
+
+    assert context.understanding_metadata is not None
+    assert context.understanding_metadata.method == "deterministic_claim_understanding"
+    assert context.understanding_metadata.status == "complete"
+    assert context.understanding_metadata.model_id is None
+    assert context.understanding_metadata.model_version is None
+    assert context.entity_mentions == []
+    assert context.relations == []
+    assert context.is_atomic_claim is None
+    assert context.is_verifiable_claim is None
+
+
+def test_understanding_preserves_original_claim_text():
+    claim = Claim(claim_id="claim-1", text="Acme   launched Product Y today.")
+
+    understand_claim(claim)
+
+    assert claim.text == "Acme   launched Product Y today."
