@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Dataset 1 split assignment row",
+  "type": "object",
+  "required": ["document_id", "story_cluster_id", "split_version", "assignment_seed"],
+  "properties": {
+    "document_id": {"type": "string", "minLength": 1},
+    "story_cluster_id": {"type": "string", "minLength": 1},
+    "split_version": {"const": "dataset1-cluster-disjoint-v1"},
+    "assignment_seed": {"type": "string", "minLength": 1}
+  },
+  "additionalProperties": false
+}

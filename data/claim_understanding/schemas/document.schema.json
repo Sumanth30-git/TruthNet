@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Dataset 1 normalized document",
+  "type": "object",
+  "required": ["schema_version", "dataset_id", "document_id", "source_id", "language", "original_text", "normalized_text", "normalized_to_original_offsets", "normalization_version", "normalized_sha256", "is_synthetic"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "dataset_id": {"const": "claim_understanding_dataset_1"},
+    "document_id": {"type": "string", "minLength": 1},
+    "source_id": {"type": "string", "minLength": 1},
+    "language": {"const": "en"},
+    "original_text": {"type": "string"},
+    "normalized_text": {"type": "string"},
+    "normalized_to_original_offsets": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+    "normalization_version": {"const": "dataset1-nfc-lf-v1"},
+    "normalized_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "is_synthetic": {"type": "boolean"},
+    "story_cluster_id": {"type": "string", "minLength": 1}
+  },
+  "additionalProperties": false
+}

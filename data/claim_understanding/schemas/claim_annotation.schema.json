@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Dataset 1 claim annotation",
+  "type": "object",
+  "required": ["schema_version", "document_id", "annotation_id", "annotator_id", "annotation_version", "normalized_text", "claims", "abstentions"],
+  "$defs": {
+    "span": {
+      "type": "object",
+      "required": ["start", "end", "text"],
+      "properties": {
+        "start": {"type": "integer", "minimum": 0},
+        "end": {"type": "integer", "minimum": 1},
+        "text": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "abstention": {
+      "type": "object",
+      "required": ["scope", "reason"],
+      "properties": {
+        "scope": {"enum": ["document", "claim"]},
+        "reason": {"enum": ["insufficient_text", "ambiguous_structure", "not_applicable", "other"]},
+        "claim_id": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "entity": {
+      "type": "object",
+      "required": ["entity_type", "source_span"],
+      "properties": {
+        "entity_type": {"enum": ["person", "organization", "location", "country", "product", "event", "other"]},
+        "source_span": {"$ref": "#/$defs/span"}
+      },
+      "additionalProperties": false
+    },
+    "relation": {
+      "type": "object",
+      "required": ["relation_type", "predicate", "subject_span", "object_span", "support_spans"],
+      "properties": {
+        "relation_type": {"type": "string", "minLength": 1},
+        "predicate": {"type": "string", "minLength": 1},
+        "subject_span": {"$ref": "#/$defs/span"},
+        "object_span": {"$ref": "#/$defs/span"},
+        "support_spans": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/span"}},
+        "negated": {"type": ["boolean", "null"]},
+        "modality": {"anyOf": [{"enum": ["asserted", "possible", "probable", "obligated", "permitted", "other"]}, {"type": "null"}]},
+        "qualifiers": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    },
+    "temporal": {
+      "type": "object",
+      "required": ["source_span", "value", "normalization"],
+      "properties": {
+        "source_span": {"$ref": "#/$defs/span"},
+        "value": {"type": "string", "minLength": 1},
+        "normalization": {"enum": ["iso_date", "relative", "verbatim"]}
+      },
+      "additionalProperties": false
+    },
+    "quantity": {
+      "type": "object",
+      "required": ["source_span", "value", "unit", "normalized_unit"],
+      "properties": {
+        "source_span": {"$ref": "#/$defs/span"},
+        "value": {"type": "number"},
+        "unit": {"type": ["string", "null"]},
+        "normalized_unit": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "location": {
+      "type": "object",
+      "required": ["source_span", "text", "normalized_name"],
+      "properties": {
+        "source_span": {"$ref": "#/$defs/span"},
+        "text": {"type": "string", "minLength": 1},
+        "normalized_name": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "modifier": {
+      "type": "object",
+      "required": ["source_span", "modifier_type", "value"],
+      "properties": {
+        "source_span": {"$ref": "#/$defs/span"},
+        "modifier_type": {"enum": ["degree", "frequency", "scope", "comparative", "other"]},
+        "value": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "negation": {
+      "type": "object",
+      "required": ["source_span", "value"],
+      "properties": {
+        "source_span": {"$ref": "#/$defs/span"},
+        "value": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "modality": {
+      "type": "object",
+      "required": ["source_span", "value"],
+      "properties": {
+        "source_span": {"$ref": "#/$defs/span"},
+        "value": {"enum": ["asserted", "possible", "probable", "obligated", "permitted", "other"]}
+      },
+      "additionalProperties": false
+    },
+    "non_claim": {
+      "type": "object",
+      "required": ["source_span", "reason"],
+      "properties": {
+        "source_span": {"$ref": "#/$defs/span"},
+        "reason": {"enum": ["question", "opinion", "instruction", "fragment", "other"]}
+      },
+      "additionalProperties": false
+    }
+  },
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "document_id": {"type": "string", "minLength": 1},
+    "annotation_id": {"type": "string", "minLength": 1},
+    "annotator_id": {"type": "string", "minLength": 1},
+    "annotation_version": {"type": "string", "minLength": 1},
+    "normalized_text": {"type": "string"},
+    "abstentions": {"type": "array", "items": {"$ref": "#/$defs/abstention"}},
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["claim_id", "source_span", "original_source_span", "original_text", "claim_type", "is_atomic", "is_verifiable_as_textual_claim"],
+        "properties": {
+          "claim_id": {"type": "string", "minLength": 1},
+          "source_span": {"$ref": "#/$defs/span"},
+          "original_source_span": {"$ref": "#/$defs/span"},
+          "original_text": {"type": "string"},
+          "claim_type": {"enum": ["general_fact", "government_announcement", "company_announcement", "product_announcement", "financial_price", "scientific", "legal_court", "sports_result", "person_statement", "event", "organization_announcement", "other", "unknown"]},
+          "is_atomic": {"type": ["boolean", "null"]},
+          "is_verifiable_as_textual_claim": {"type": ["boolean", "null"]},
+          "entities": {"type": "array", "items": {"$ref": "#/$defs/entity"}},
+          "relations": {"type": "array", "items": {"$ref": "#/$defs/relation"}},
+          "temporal_annotations": {"type": "array", "items": {"$ref": "#/$defs/temporal"}},
+          "quantity_annotations": {"type": "array", "items": {"$ref": "#/$defs/quantity"}},
+          "location_annotations": {"type": "array", "items": {"$ref": "#/$defs/location"}},
+          "modifiers": {"type": "array", "items": {"$ref": "#/$defs/modifier"}},
+          "negation": {"anyOf": [{"$ref": "#/$defs/negation"}, {"type": "null"}]},
+          "modality": {"anyOf": [{"$ref": "#/$defs/modality"}, {"type": "null"}]},
+          "non_claim_spans": {"type": "array", "items": {"$ref": "#/$defs/non_claim"}}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

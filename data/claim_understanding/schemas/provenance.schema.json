@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Dataset 1 source provenance",
+  "type": "object",
+  "required": ["document_id", "source_id", "source_category", "acquisition_date", "license", "license_verification_status", "uri", "checksum", "collector_id", "notes"],
+  "properties": {
+    "document_id": {"type": "string", "minLength": 1}, "source_id": {"type": "string", "minLength": 1},
+    "source_category": {"type": "string", "minLength": 1}, "acquisition_date": {"type": "string", "format": "date"},
+    "license": {"type": "string", "minLength": 1}, "license_verification_status": {"enum": ["verified", "unverified", "not_applicable"]},
+    "uri": {"type": "string", "pattern": "^(https?://|urn:)"}, "checksum": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "collector_id": {"type": "string", "minLength": 1}, "notes": {"type": "string"}
+  },
+  "additionalProperties": false
+}

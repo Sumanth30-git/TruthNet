@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Dataset 1 adjudication",
+  "type": "object",
+  "required": ["schema_version", "adjudication_id", "document_id", "annotator_a_annotation_id", "annotator_b_annotation_id", "adjudicator_id", "adjudication_version", "status", "rationale"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "adjudication_id": {"type": "string", "minLength": 1},
+    "document_id": {"type": "string", "minLength": 1},
+    "annotator_a_annotation_id": {"type": "string", "minLength": 1},
+    "annotator_b_annotation_id": {"type": "string", "minLength": 1},
+    "adjudicator_id": {"type": "string", "minLength": 1},
+    "adjudication_version": {"type": "string", "minLength": 1},
+    "status": {"enum": ["adjudicated", "abstained", "needs_review"]},
+    "rationale": {"type": "string", "minLength": 1},
+    "gold_annotation": {"$ref": "claim_annotation.schema.json"}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Dataset 1 freeze manifest",
+  "type": "object",
+  "required": [
+    "status", "dataset_id", "freeze_manifest_schema_version", "dataset_version",
+    "document_count", "claim_count", "split_counts", "document_ids", "split_membership",
+    "cluster_count", "cluster_integrity", "provenance_completeness", "annotation_completeness",
+    "adjudication_completeness", "qc_status", "schema_hashes", "artifact_sha256",
+    "normalization_version", "split_version", "scorer_version", "required_fields"
+  ],
+  "properties": {
+    "status": {"enum": ["not_frozen", "validated", "frozen"]},
+    "dataset_id": {"const": "claim_understanding_dataset_1"},
+    "freeze_manifest_schema_version": {"const": "1.0"},
+    "dataset_version": {"type": "string", "minLength": 1},
+    "document_count": {"type": "integer", "minimum": 0},
+    "claim_count": {"type": "integer", "minimum": 0},
+    "split_counts": {
+      "type": "object",
+      "required": ["development", "validation", "frozen_test"],
+      "properties": {
+        "development": {"type": "integer", "minimum": 0},
+        "validation": {"type": "integer", "minimum": 0},
+        "frozen_test": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "document_ids": {"type": "array", "items": {"type": "string"}},
+    "cluster_count": {"type": "integer", "minimum": 0},
+    "split_membership": {
+      "type": "object",
+      "required": ["development", "validation", "frozen_test"],
+      "properties": {
+        "development": {"type": "array", "items": {"type": "string"}},
+        "validation": {"type": "array", "items": {"type": "string"}},
+        "frozen_test": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    },
+    "cluster_integrity": {"enum": ["not_evaluated", "complete", "incomplete", "invalid"]},
+    "provenance_completeness": {"enum": ["not_evaluated", "complete", "incomplete"]},
+    "annotation_completeness": {"enum": ["not_evaluated", "complete", "incomplete"]},
+    "adjudication_completeness": {"enum": ["not_evaluated", "complete", "incomplete"]},
+    "qc_status": {"enum": ["empty", "pass", "needs_review", "fail"]},
+    "schema_hashes": {"type": "object", "additionalProperties": {"type": "string"}},
+    "artifact_sha256": {"type": "object", "additionalProperties": {"type": ["string", "null"]}},
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["expected", "relative_path", "exists", "size_bytes", "sha256"],
+        "properties": {
+          "expected": {"type": "boolean"},
+          "relative_path": {"type": "string", "minLength": 1},
+          "exists": {"type": "boolean"},
+          "size_bytes": {"type": ["integer", "null"], "minimum": 0},
+          "sha256": {"type": ["string", "null"]}
+        },
+        "additionalProperties": false
+      }
+    },
+    "content_identity": {"type": "string", "minLength": 1},
+    "adjudication_status_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+    "validation_summary": {"type": "object"},
+    "contract": {"type": "object"},
+    "annotation_version": {"type": "string"},
+    "adjudication_version": {"type": "string"},
+    "normalization_version": {"type": "string"},
+    "source_provenance_version": {"type": "string"},
+    "split_version": {"type": "string"},
+    "scorer_version": {"type": "string"},
+    "timestamp": {"type": "string"},
+    "required_fields": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": false
+}
