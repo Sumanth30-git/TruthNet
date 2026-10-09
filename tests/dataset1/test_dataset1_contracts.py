@@ -205,7 +205,7 @@ def _workflow_result(monkeypatch, documents: list[dict], *, clusters: list[dict]
     }
     for split in ("development", "validation", "frozen_test"):
         rows[("splits", f"{split}.jsonl")] = (splits or {}).get(split, [])
-    monkeypatch.setattr(dataset1_validate_module, "read_jsonl", lambda path: rows[(path.parent.name, path.name)])
+    monkeypatch.setattr(dataset1_validate_module, "read_jsonl", lambda path: rows.get((path.parent.name, path.name), []))
     return validate_dataset(Path("in-memory-dataset1"))
 
 

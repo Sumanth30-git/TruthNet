@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Dataset 1 source collection candidate",
+  "type": "object",
+  "required": ["schema_version", "candidate_id", "source_id", "canonical_uri", "source_category", "language", "discovery", "source_identity", "independence", "publication", "collection", "license", "license_verification_status", "usage_assessment", "eligibility_checks", "collection_status", "exclusion_reason", "duplicate_review", "retained_document_id", "notes"],
+  "$defs": {
+    "nullable_string": {"type": ["string", "null"]},
+    "source_identity": {
+      "type": "object",
+      "required": ["identity_id", "display_name", "canonical_domain", "identity_basis"],
+      "properties": {
+        "identity_id": {"type": "string", "minLength": 1},
+        "display_name": {"type": "string", "minLength": 1},
+        "canonical_domain": {"type": ["string", "null"]},
+        "identity_basis": {"enum": ["publisher_domain", "official_organization", "licensed_archive", "other_documented"]}
+      },
+      "additionalProperties": false
+    },
+    "independence": {
+      "type": "object",
+      "required": ["relationship", "origin_uri", "origin_source_identity"],
+      "properties": {
+        "relationship": {"enum": ["primary_or_official", "independent_reporting", "syndicated_or_republished", "copy_or_mirror", "unknown_needs_review"]},
+        "origin_uri": {"type": ["string", "null"], "pattern": "^(https?://|urn:)"},
+        "origin_source_identity": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "publication": {
+      "type": "object",
+      "required": ["precision", "value", "verbatim"],
+      "properties": {
+        "precision": {"enum": ["date", "timestamp", "not_available", "uncertain"]},
+        "value": {"type": ["string", "null"]},
+        "verbatim": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "collection": {
+      "type": "object",
+      "required": ["collected_at", "collector_id", "access_status", "content_sha256", "content_length", "content_format"],
+      "properties": {
+        "collected_at": {"type": "string", "minLength": 1},
+        "collector_id": {"type": "string", "minLength": 1},
+        "access_status": {"enum": ["accessible", "restricted", "unavailable"]},
+        "content_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+        "content_length": {"type": ["integer", "null"], "minimum": 0},
+        "content_format": {"enum": ["html", "pdf", "text", "other", "not_collected"]}
+      },
+      "additionalProperties": false
+    },
+    "eligibility_checks": {
+      "type": "object",
+      "required": ["english_language", "meaningful_text", "attributable_source", "stable_source_identity", "accessible", "license_reviewed", "source_independence_reviewed"],
+      "properties": {
+        "english_language": {"type": "boolean"},
+        "meaningful_text": {"type": "boolean"},
+        "attributable_source": {"type": "boolean"},
+        "stable_source_identity": {"type": "boolean"},
+        "accessible": {"type": "boolean"},
+        "license_reviewed": {"type": "boolean"},
+        "source_independence_reviewed": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "duplicate_review": {
+      "type": "object",
+      "required": ["status", "canonical_candidate_id", "reviewed_by", "reviewed_at"],
+      "properties": {
+        "status": {"enum": ["not_assessed", "unique", "exact_duplicate", "near_duplicate", "same_syndicated_text", "needs_human_review"]},
+        "canonical_candidate_id": {"type": ["string", "null"]},
+        "reviewed_by": {"type": ["string", "null"]},
+        "reviewed_at": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    }
+  },
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "candidate_id": {"type": "string", "minLength": 1},
+    "source_id": {"type": "string", "minLength": 1},
+    "canonical_uri": {"type": "string", "pattern": "^(https?://|urn:)"},
+    "source_category": {"enum": ["publisher", "broadcaster", "wire_service", "government", "official_organization", "licensed_archive", "other_documented"]},
+    "language": {"const": "en"},
+    "discovery": {
+      "type": "object",
+      "required": ["method", "route", "discovered_at", "discovered_by"],
+      "properties": {
+        "method": {"enum": ["curated_source_review", "publisher_archive", "official_archive", "licensed_archive", "manual_search", "other_documented"]},
+        "route": {"type": "string", "minLength": 1},
+        "discovered_at": {"type": "string", "minLength": 1},
+        "discovered_by": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "source_identity": {"$ref": "#/$defs/source_identity"},
+    "independence": {"$ref": "#/$defs/independence"},
+    "publication": {"$ref": "#/$defs/publication"},
+    "collection": {"$ref": "#/$defs/collection"},
+    "license": {"$ref": "#/$defs/nullable_string"},
+    "license_verification_status": {"enum": ["verified", "unverified", "not_applicable", "not_found"]},
+    "usage_assessment": {"enum": ["permitted", "requires_review", "prohibited", "unknown"]},
+    "eligibility_checks": {"$ref": "#/$defs/eligibility_checks"},
+    "collection_status": {"enum": ["eligible", "excluded", "retained"]},
+    "exclusion_reason": {"enum": ["unsupported_language", "insufficient_text", "unattributable_source", "unstable_source_identity", "inaccessible", "licensing_or_usage", "duplicate_exact", "duplicate_near", "syndicated_or_republished", "outside_scope", "other_documented", null]},
+    "duplicate_review": {"$ref": "#/$defs/duplicate_review"},
+    "retained_document_id": {"type": ["string", "null"]},
+    "notes": {"type": "string"}
+  },
+  "additionalProperties": false
+}

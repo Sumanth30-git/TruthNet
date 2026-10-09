@@ -15,7 +15,8 @@ try:  # Supports both ``python -m`` and direct script execution.
     from scripts.dataset1_common import (
         ValidationIssue, exact_duplicate_ids, read_jsonl, run_duplicate_qc,
         validate_adjudication,
-        validate_claim_annotation, validate_document, validate_provenance,
+        validate_claim_annotation, validate_collection_candidate, validate_collection_cross_file_integrity,
+        validate_document, validate_provenance,
         validate_cross_file_integrity, validate_story_cluster_records,
         validate_split_records,
     )
@@ -24,7 +25,8 @@ except ModuleNotFoundError:  # pragma: no cover - exercised by CLI use
     from dataset1_common import (
         ValidationIssue, exact_duplicate_ids, read_jsonl, run_duplicate_qc,
         validate_adjudication,
-        validate_claim_annotation, validate_document, validate_provenance,
+        validate_claim_annotation, validate_collection_candidate, validate_collection_cross_file_integrity,
+        validate_document, validate_provenance,
         validate_cross_file_integrity, validate_story_cluster_records,
         validate_split_records,
     )
@@ -39,6 +41,7 @@ def validate_dataset(root: Path) -> dict[str, Any]:
     """Validate all available Dataset 1 artifacts without mutating them."""
     documents = read_jsonl(root / "documents" / "normalized.jsonl")
     provenance = read_jsonl(root / "provenance" / "sources.jsonl")
+    candidates = read_jsonl(root / "provenance" / "candidates.jsonl")
     clusters = read_jsonl(root / "clusters" / "story_clusters.jsonl")
     annotator_a = read_jsonl(root / "annotations" / "annotator_a.jsonl")
     annotator_b = read_jsonl(root / "annotations" / "annotator_b.jsonl")
@@ -62,6 +65,7 @@ def validate_dataset(root: Path) -> dict[str, Any]:
     # Schema checks are part of the workflow, not advisory definitions.
     add_schema_issues(documents, "document.schema.json", "documents")
     add_schema_issues(provenance, "provenance.schema.json", "provenance")
+    add_schema_issues(candidates, "collection_candidate.schema.json", "candidates")
     add_schema_issues(clusters, "story_cluster.schema.json", "clusters")
     add_schema_issues(annotator_a, "claim_annotation.schema.json", "annotator_a")
     add_schema_issues(annotator_b, "claim_annotation.schema.json", "annotator_b")
@@ -75,6 +79,8 @@ def validate_dataset(root: Path) -> dict[str, Any]:
         issues.append(ValidationIssue("duplicate_document_id", f"duplicate document ID: {duplicate_id}", "documents"))
     for index, row in enumerate(provenance):
         issues.extend(ValidationIssue(item.code, item.message, f"provenance[{index}].{item.path}".rstrip(".")) for item in validate_provenance(row))
+    for index, row in enumerate(candidates):
+        issues.extend(ValidationIssue(item.code, item.message, f"candidates[{index}].{item.path}".rstrip(".")) for item in validate_collection_candidate(row))
     cluster_issues = validate_story_cluster_records(documents, clusters)
     if documents:
         issues.extend(cluster_issues)
@@ -87,6 +93,7 @@ def validate_dataset(root: Path) -> dict[str, Any]:
         document = documents_by_id.get(document_id)
         issues.extend(ValidationIssue(item.code, item.message, f"annotations[{index}].{item.path}".rstrip(".")) for item in validate_adjudication(row, document))
     issues.extend(validate_cross_file_integrity(documents, provenance, annotator_a, annotator_b, annotations))
+    issues.extend(validate_collection_cross_file_integrity(documents, provenance, candidates))
     issues.extend(validate_story_cluster_records(documents, clusters))
     issues.extend(validate_split_records(documents, split_rows, clusters))
     qc = run_duplicate_qc(documents, clusters, split_rows)
@@ -102,6 +109,7 @@ def validate_dataset(root: Path) -> dict[str, Any]:
         "qc": qc,
         "document_count": len(documents),
         "provenance_count": len(provenance),
+        "candidate_count": len(candidates),
         "cluster_count": len(clusters),
         "annotator_a_count": len(annotator_a),
         "annotator_b_count": len(annotator_b),

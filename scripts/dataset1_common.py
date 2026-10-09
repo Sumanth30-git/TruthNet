@@ -11,7 +11,7 @@ import re
 import unicodedata
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -27,6 +27,12 @@ NEAR_DUPLICATE_REVIEW_THRESHOLD = 0.9
 CLAIM_TYPES = {"general_fact", "government_announcement", "company_announcement", "product_announcement", "financial_price", "scientific", "legal_court", "sports_result", "person_statement", "event", "organization_announcement", "other", "unknown"}
 ENTITY_TYPES = {"person", "organization", "location", "country", "product", "event", "other"}
 LICENSE_STATUSES = {"verified", "unverified", "not_applicable"}
+COLLECTION_LICENSE_STATUSES = LICENSE_STATUSES | {"not_found"}
+SOURCE_CATEGORIES = {"publisher", "broadcaster", "wire_service", "government", "official_organization", "licensed_archive", "other_documented"}
+COLLECTION_STATUSES = {"eligible", "excluded", "retained"}
+INDEPENDENCE_RELATIONSHIPS = {"primary_or_official", "independent_reporting", "syndicated_or_republished", "copy_or_mirror", "unknown_needs_review"}
+DUPLICATE_REVIEW_STATUSES = {"not_assessed", "unique", "exact_duplicate", "near_duplicate", "same_syndicated_text", "needs_human_review"}
+EXCLUSION_REASONS = {"unsupported_language", "insufficient_text", "unattributable_source", "unstable_source_identity", "inaccessible", "licensing_or_usage", "duplicate_exact", "duplicate_near", "syndicated_or_republished", "outside_scope", "other_documented"}
 ABSTENTION_SCOPES = {"document", "claim"}
 ABSTENTION_REASONS = {"insufficient_text", "ambiguous_structure", "not_applicable", "other"}
 MODALITIES = {"asserted", "possible", "probable", "obligated", "permitted", "other"}
@@ -132,6 +138,185 @@ def validate_provenance(record: Mapping[str, Any]) -> list[ValidationIssue]:
     except (TypeError, ValueError): issues.append(ValidationIssue("invalid_date", "acquisition_date must be ISO-8601", "acquisition_date"))
     if _nonempty(record.get("uri")) and not re.match(r"^(https?://|urn:)", record["uri"]): issues.append(ValidationIssue("invalid_uri", "uri must be http(s) or URN", "uri"))
     if _nonempty(record.get("checksum")) and not re.fullmatch(r"[0-9a-f]{64}", record["checksum"]): issues.append(ValidationIssue("invalid_checksum", "checksum must be SHA-256 hex", "checksum"))
+    return issues
+
+
+def _is_timestamp(value: object) -> bool:
+    """Accept only timezone-bearing ISO-8601 timestamps used by the ledger."""
+    if not _nonempty(value) or "T" not in value:
+        return False
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None
+
+
+def validate_collection_candidate(record: Mapping[str, Any]) -> list[ValidationIssue]:
+    """Validate a Stage 3A collection-ledger record without collecting data."""
+    issues: list[ValidationIssue] = []
+    for key in ("candidate_id", "source_id", "canonical_uri", "source_category", "language", "collection_status"):
+        if not _nonempty(record.get(key)):
+            issues.append(ValidationIssue("missing_field", f"{key} is required", key))
+    if record.get("language") != "en":
+        issues.append(ValidationIssue("invalid_language", "Dataset 1 candidates must be English", "language"))
+    if record.get("source_category") not in SOURCE_CATEGORIES:
+        issues.append(ValidationIssue("invalid_enum", "invalid source category", "source_category"))
+    if _nonempty(record.get("canonical_uri")) and not re.match(r"^(https?://|urn:)", str(record["canonical_uri"])):
+        issues.append(ValidationIssue("invalid_uri", "canonical_uri must be http(s) or URN", "canonical_uri"))
+    discovery = record.get("discovery")
+    if not isinstance(discovery, Mapping):
+        issues.append(ValidationIssue("invalid_discovery", "discovery must be an object", "discovery"))
+    else:
+        for key in ("method", "route", "discovered_at", "discovered_by"):
+            if not _nonempty(discovery.get(key)):
+                issues.append(ValidationIssue("missing_field", f"discovery.{key} is required", f"discovery.{key}"))
+        if _nonempty(discovery.get("discovered_at")) and not _is_timestamp(discovery["discovered_at"]):
+            issues.append(ValidationIssue("invalid_timestamp", "discovery timestamp must include a timezone", "discovery.discovered_at"))
+    identity = record.get("source_identity")
+    if not isinstance(identity, Mapping):
+        issues.append(ValidationIssue("invalid_source_identity", "source_identity must be an object", "source_identity"))
+    else:
+        for key in ("identity_id", "display_name", "identity_basis"):
+            if not _nonempty(identity.get(key)):
+                issues.append(ValidationIssue("invalid_source_identity", f"source_identity.{key} is required", f"source_identity.{key}"))
+        if identity.get("identity_basis") not in {"publisher_domain", "official_organization", "licensed_archive", "other_documented"}:
+            issues.append(ValidationIssue("invalid_source_identity", "invalid source identity basis", "source_identity.identity_basis"))
+    independence = record.get("independence")
+    if not isinstance(independence, Mapping):
+        issues.append(ValidationIssue("invalid_independence", "independence must be an object", "independence"))
+    else:
+        relationship = independence.get("relationship")
+        if relationship not in INDEPENDENCE_RELATIONSHIPS:
+            issues.append(ValidationIssue("invalid_independence", "invalid independence relationship", "independence.relationship"))
+        if relationship in {"syndicated_or_republished", "copy_or_mirror"}:
+            if not _nonempty(independence.get("origin_uri")) or not _nonempty(independence.get("origin_source_identity")):
+                issues.append(ValidationIssue("missing_origin", "syndicated or copied material must identify its origin", "independence"))
+    publication = record.get("publication")
+    if not isinstance(publication, Mapping):
+        issues.append(ValidationIssue("invalid_publication", "publication must be an object", "publication"))
+    else:
+        precision, value = publication.get("precision"), publication.get("value")
+        if precision == "date":
+            try:
+                date.fromisoformat(value)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                issues.append(ValidationIssue("invalid_publication", "date precision requires ISO date", "publication.value"))
+        elif precision == "timestamp":
+            if not _is_timestamp(value):
+                issues.append(ValidationIssue("invalid_publication", "timestamp precision requires timezone-bearing ISO timestamp", "publication.value"))
+        elif precision in {"not_available", "uncertain"}:
+            if value is not None:
+                issues.append(ValidationIssue("invalid_publication", "unavailable or uncertain publication information must have null value", "publication.value"))
+        else:
+            issues.append(ValidationIssue("invalid_publication", "invalid publication precision", "publication.precision"))
+    collection = record.get("collection")
+    if not isinstance(collection, Mapping):
+        issues.append(ValidationIssue("invalid_collection", "collection must be an object", "collection"))
+    else:
+        if not _is_timestamp(collection.get("collected_at")):
+            issues.append(ValidationIssue("invalid_timestamp", "collection timestamp must include a timezone", "collection.collected_at"))
+        if not _nonempty(collection.get("collector_id")):
+            issues.append(ValidationIssue("missing_field", "collection.collector_id is required", "collection.collector_id"))
+        digest, length = collection.get("content_sha256"), collection.get("content_length")
+        if digest is not None and (not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)):
+            issues.append(ValidationIssue("invalid_checksum", "content_sha256 must be SHA-256 hex or null", "collection.content_sha256"))
+        if length is not None and (not isinstance(length, int) or isinstance(length, bool) or length < 0):
+            issues.append(ValidationIssue("invalid_content_length", "content_length must be a non-negative integer or null", "collection.content_length"))
+    license_status = record.get("license_verification_status")
+    usage = record.get("usage_assessment")
+    if license_status not in COLLECTION_LICENSE_STATUSES or usage not in {"permitted", "requires_review", "prohibited", "unknown"}:
+        issues.append(ValidationIssue("invalid_enum", "invalid licensing or usage assessment", "license_verification_status"))
+    checks = record.get("eligibility_checks")
+    if not isinstance(checks, Mapping):
+        issues.append(ValidationIssue("invalid_eligibility", "eligibility_checks must be an object", "eligibility_checks"))
+    else:
+        required_checks = ("english_language", "meaningful_text", "attributable_source", "stable_source_identity", "accessible", "license_reviewed", "source_independence_reviewed")
+        for key in required_checks:
+            if not isinstance(checks.get(key), bool):
+                issues.append(ValidationIssue("invalid_eligibility", f"eligibility_checks.{key} must be boolean", f"eligibility_checks.{key}"))
+    status = record.get("collection_status")
+    reason, retained = record.get("exclusion_reason"), record.get("retained_document_id")
+    if status not in COLLECTION_STATUSES:
+        issues.append(ValidationIssue("invalid_enum", "invalid collection status", "collection_status"))
+    if status == "excluded":
+        if reason not in EXCLUSION_REASONS:
+            issues.append(ValidationIssue("missing_exclusion_reason", "excluded candidate needs an explicit exclusion reason", "exclusion_reason"))
+        if retained is not None:
+            issues.append(ValidationIssue("invalid_retention", "excluded candidate cannot name a retained document", "retained_document_id"))
+    else:
+        if reason is not None:
+            issues.append(ValidationIssue("invalid_exclusion_reason", "eligible or retained candidate cannot have an exclusion reason", "exclusion_reason"))
+        required_checks = ("english_language", "meaningful_text", "attributable_source", "stable_source_identity", "accessible", "license_reviewed", "source_independence_reviewed")
+        if not isinstance(checks, Mapping) or not all(checks.get(key) is True for key in required_checks):
+            issues.append(ValidationIssue("ineligible_candidate", "eligible or retained candidate requires every eligibility check", "eligibility_checks"))
+        if status == "retained":
+            if not _nonempty(retained):
+                issues.append(ValidationIssue("missing_retained_document", "retained candidate must name its document", "retained_document_id"))
+            if usage != "permitted" or license_status not in {"verified", "not_applicable"}:
+                issues.append(ValidationIssue("invalid_retention", "retained candidate requires permitted, verified licensing", "usage_assessment"))
+            if not isinstance(collection, Mapping) or collection.get("access_status") != "accessible" or not _nonempty(collection.get("content_sha256")) or not isinstance(collection.get("content_length"), int) or collection["content_length"] <= 0:
+                issues.append(ValidationIssue("invalid_retention", "retained candidate requires accessible, meaningful collected content", "collection"))
+        elif retained is not None:
+            issues.append(ValidationIssue("invalid_retention", "eligible candidate cannot name a retained document", "retained_document_id"))
+    duplicate = record.get("duplicate_review")
+    if not isinstance(duplicate, Mapping):
+        issues.append(ValidationIssue("invalid_duplicate_review", "duplicate_review must be an object", "duplicate_review"))
+    else:
+        duplicate_status, canonical_id = duplicate.get("status"), duplicate.get("canonical_candidate_id")
+        if duplicate_status not in DUPLICATE_REVIEW_STATUSES:
+            issues.append(ValidationIssue("invalid_duplicate_review", "invalid duplicate review status", "duplicate_review.status"))
+        if duplicate_status in {"exact_duplicate", "near_duplicate", "same_syndicated_text"} and not _nonempty(canonical_id):
+            issues.append(ValidationIssue("missing_canonical_candidate", "duplicate review must identify a canonical candidate", "duplicate_review.canonical_candidate_id"))
+        if duplicate_status in {"unique", "not_assessed", "needs_human_review"} and canonical_id is not None:
+            issues.append(ValidationIssue("invalid_duplicate_review", "non-duplicate review cannot name a canonical candidate", "duplicate_review.canonical_candidate_id"))
+        if status == "retained" and duplicate_status != "unique":
+            issues.append(ValidationIssue("invalid_retention", "retained candidate must be the reviewed unique canonical candidate", "duplicate_review.status"))
+    return issues
+
+
+def validate_collection_cross_file_integrity(
+    documents: Sequence[Mapping[str, Any]],
+    provenance: Sequence[Mapping[str, Any]],
+    candidates: Sequence[Mapping[str, Any]],
+) -> list[ValidationIssue]:
+    """Connect retained Stage 3A candidates to existing document provenance."""
+    issues: list[ValidationIssue] = []
+    candidate_ids = [row.get("candidate_id") for row in candidates if _nonempty(row.get("candidate_id"))]
+    if len(candidate_ids) != len(set(candidate_ids)):
+        issues.append(ValidationIssue("duplicate_candidate_id", "candidate IDs must be unique", "candidates"))
+    candidate_by_id = {str(row.get("candidate_id")): row for row in candidates if _nonempty(row.get("candidate_id"))}
+    for index, row in enumerate(candidates):
+        duplicate = row.get("duplicate_review")
+        if isinstance(duplicate, Mapping) and _nonempty(duplicate.get("canonical_candidate_id")):
+            canonical_id = str(duplicate["canonical_candidate_id"])
+            if canonical_id == row.get("candidate_id") or canonical_id not in candidate_by_id:
+                issues.append(ValidationIssue("invalid_canonical_candidate", "duplicate review must refer to a different known candidate", f"candidates[{index}].duplicate_review.canonical_candidate_id"))
+    if not documents:
+        return issues
+    documents_by_id = {str(row.get("document_id")): row for row in documents if _nonempty(row.get("document_id"))}
+    provenance_by_doc = {str(row.get("document_id")): row for row in provenance if _nonempty(row.get("document_id"))}
+    retained = [row for row in candidates if row.get("collection_status") == "retained"]
+    retained_by_doc: dict[str, list[Mapping[str, Any]]] = {}
+    for index, row in enumerate(retained):
+        document_id = row.get("retained_document_id")
+        if document_id not in documents_by_id:
+            issues.append(ValidationIssue("orphan_retained_candidate", "retained candidate references unknown document", f"candidates[{index}].retained_document_id"))
+            continue
+        retained_by_doc.setdefault(str(document_id), []).append(row)
+        document = documents_by_id[str(document_id)]
+        if row.get("source_id") != document.get("source_id"):
+            issues.append(ValidationIssue("candidate_source_mismatch", "retained candidate source_id must match document", f"candidates[{index}].source_id"))
+        provenance_row = provenance_by_doc.get(str(document_id))
+        collection = row.get("collection")
+        if provenance_row is not None and isinstance(collection, Mapping) and collection.get("content_sha256") != provenance_row.get("checksum"):
+            issues.append(ValidationIssue("candidate_checksum_mismatch", "retained candidate checksum must match provenance checksum", f"candidates[{index}].collection.content_sha256"))
+    for document_id in documents_by_id:
+        rows = retained_by_doc.get(document_id, [])
+        if not rows:
+            issues.append(ValidationIssue("missing_collection_candidate", "document has no retained collection candidate", "candidates"))
+        elif len(rows) > 1:
+            issues.append(ValidationIssue("duplicate_retained_candidate", "document has multiple retained collection candidates", "candidates"))
     return issues
 
 
@@ -565,4 +750,3 @@ def completeness_labels(
         "annotation_completeness": annotation,
         "adjudication_completeness": adjudication,
     }
-

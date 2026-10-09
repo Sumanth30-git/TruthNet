@@ -44,6 +44,23 @@ def _annotation(document: dict, annotation_id: str, annotator_id: str) -> dict:
     }
 
 
+def _candidate(document: dict, index: int) -> dict:
+    return {
+        "schema_version": "1.0", "candidate_id": f"candidate-{index:03d}", "source_id": document["source_id"],
+        "canonical_uri": f"https://example.org/{index}", "source_category": "publisher", "language": "en",
+        "discovery": {"method": "publisher_archive", "route": f"fixture/{index}", "discovered_at": "2026-10-04T00:00:00Z", "discovered_by": "fixture"},
+        "source_identity": {"identity_id": f"example-{index:03d}", "display_name": "Example", "canonical_domain": "example.org", "identity_basis": "publisher_domain"},
+        "independence": {"relationship": "independent_reporting", "origin_uri": None, "origin_source_identity": None},
+        "publication": {"precision": "not_available", "value": None, "verbatim": None},
+        "collection": {"collected_at": "2026-10-04T00:00:00Z", "collector_id": "fixture", "access_status": "accessible", "content_sha256": sha256_text(document["original_text"]), "content_length": len(document["original_text"]), "content_format": "text"},
+        "license": "example", "license_verification_status": "verified", "usage_assessment": "permitted",
+        "eligibility_checks": {"english_language": True, "meaningful_text": True, "attributable_source": True, "stable_source_identity": True, "accessible": True, "license_reviewed": True, "source_independence_reviewed": True},
+        "collection_status": "retained", "exclusion_reason": None,
+        "duplicate_review": {"status": "unique", "canonical_candidate_id": None, "reviewed_by": "fixture", "reviewed_at": "2026-10-04T00:00:00Z"},
+        "retained_document_id": document["document_id"], "notes": "",
+    }
+
+
 def _make_fixture(root: Path, *, populated: bool = True) -> Path:
     for relative in CANONICAL_ARTIFACT_PATHS:
         source = SOURCE_ROOT / relative
@@ -66,6 +83,7 @@ def _make_fixture(root: Path, *, populated: bool = True) -> Path:
         "license_verification_status": "verified", "uri": f"https://example.org/{index}",
         "checksum": sha256_text(document["original_text"]), "collector_id": "fixture", "notes": "",
     } for index, document in enumerate(documents)]
+    candidates = [_candidate(document, index) for index, document in enumerate(documents)]
     clusters = [{"document_id": document["document_id"], "story_cluster_id": f"cluster-{index:03d}", "cluster_version": "1.0"} for index, document in enumerate(documents)]
     annotator_a = [_annotation(document, f"a-{index:03d}", "annotator-a") for index, document in enumerate(documents)]
     annotator_b = [_annotation(document, f"b-{index:03d}", "annotator-b") for index, document in enumerate(documents)]
@@ -85,6 +103,7 @@ def _make_fixture(root: Path, *, populated: bool = True) -> Path:
     }
     _write_jsonl(root / "documents/normalized.jsonl", documents)
     _write_jsonl(root / "provenance/sources.jsonl", provenance)
+    _write_jsonl(root / "provenance/candidates.jsonl", candidates)
     _write_jsonl(root / "clusters/story_clusters.jsonl", clusters)
     _write_jsonl(root / "annotations/annotator_a.jsonl", annotator_a)
     _write_jsonl(root / "annotations/annotator_b.jsonl", annotator_b)
