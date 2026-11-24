@@ -39,6 +39,20 @@ def test_nli_configuration_uses_environment_with_safe_defaults(monkeypatch: pyte
     assert news_nli_max_source_chars() == 6000
 
 
+def test_nli_readiness_is_lazy_and_reports_load_state_without_loading(monkeypatch: pytest.MonkeyPatch):
+    from backend.schemas import ModelLoadStatus
+
+    monkeypatch.setenv("MODEL_INFERENCE_ENABLED", "false")
+    adapter = NLIModelAdapter()
+    assert adapter.readiness().model_id == "cross-encoder/nli-deberta-v3-base"
+    assert adapter.readiness().status == ModelLoadStatus.NOT_LOADED
+    assert adapter.is_loaded is False
+
+    adapter._load_error = True
+    assert adapter.readiness().status == ModelLoadStatus.FAILED
+    assert adapter.readiness().message == "NLI model is unavailable."
+
+
 def _signal(label: str, *, status: SignalStatus = SignalStatus.COMPLETE) -> NLIEvidenceSignal:
     return NLIEvidenceSignal(
         model_id="cross-encoder/nli-deberta-v3-base",

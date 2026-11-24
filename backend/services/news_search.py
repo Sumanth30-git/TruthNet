@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -12,9 +13,86 @@ from urllib.parse import urlparse
 
 import httpx
 
-from backend.schemas import SearchResponse, SearchResult
+from backend.schemas import Claim, SearchResponse, SearchResult
 
 logger = logging.getLogger(__name__)
+
+_QUERY_STOP_WORDS = frozenset({
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in", "is",
+    "it", "of", "on", "or", "the", "this", "that", "to", "with", "will", "was", "were",
+})
+_QUERY_TOKEN_RE = re.compile(r"[^\W_]+(?:[.'’/-][^\W_]+)*%?", re.UNICODE)
+
+
+def _claim_id(raw_claim: object) -> str | None:
+    try:
+        claim = raw_claim if isinstance(raw_claim, Claim) else Claim.model_validate(raw_claim)
+    except Exception:
+        return None
+    if isinstance(claim.claim_id, str) and claim.claim_id:
+        return claim.claim_id
+    return None
+
+
+def _union_claim_ids(existing: Sequence[str], incoming: Sequence[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for claim_id in (*existing, *incoming):
+        if not isinstance(claim_id, str) or not claim_id or claim_id in seen:
+            continue
+        merged.append(claim_id)
+        seen.add(claim_id)
+    return merged
+
+
+def build_claim_search_query(raw_claim: object) -> str | None:
+    """Build a stable search query from one claim and only its extracted context."""
+    try:
+        claim = raw_claim if isinstance(raw_claim, Claim) else Claim.model_validate(raw_claim)
+    except Exception:
+        return None
+    text = " ".join(claim.text.split()) if isinstance(claim.text, str) else ""
+    if not text:
+        return None
+
+    context = claim.context
+    structured_terms: list[str] = []
+    if context is not None:
+        structured_terms.extend(
+            value for value in (
+                context.subject,
+                *(entity.text for entity in context.entity_mentions),
+                context.event,
+                context.location,
+                context.time_reference,
+                *(number.raw_text for number in context.numerical_values),
+            )
+            if isinstance(value, str) and value.strip()
+        )
+
+    parts: list[str] = []
+    seen_phrases: set[str] = set()
+    covered_tokens: set[str] = set()
+    for term in structured_terms:
+        phrase = " ".join(term.split())
+        key = phrase.casefold()
+        if key in seen_phrases:
+            continue
+        seen_phrases.add(key)
+        parts.append(phrase)
+        covered_tokens.update(token.casefold() for token in _QUERY_TOKEN_RE.findall(phrase))
+
+    # Preserve claim-specific wording that is not already represented by the
+    # structured fields, while omitting common connective words.
+    for token in _QUERY_TOKEN_RE.findall(text):
+        folded = token.casefold()
+        if folded in covered_tokens or folded in _QUERY_STOP_WORDS:
+            continue
+        if folded not in seen_phrases:
+            parts.append(token)
+            seen_phrases.add(folded)
+
+    return " ".join(parts) or text
 
 
 @dataclass(frozen=True)
@@ -22,6 +100,7 @@ class SearchConfig:
     provider: str = "none"
     timeout_seconds: float = 5.0
     max_results: int = 5
+    max_claim_queries: int = 3
 
     @classmethod
     def from_env(cls) -> "SearchConfig":
@@ -148,6 +227,86 @@ class SearchService:
             # Provider exception text can contain request details; never include it in logs or responses.
             logger.warning("News search provider failed")
             return SearchResponse(status="failed", provider=provider.name, message="Search provider returned an invalid response or failed.")
+
+    def search_claims(self, claims: Sequence[object]) -> SearchResponse:
+        """Search a bounded set of deterministic queries derived from claims."""
+        if not isinstance(claims, Sequence) or isinstance(claims, (str, bytes)):
+            claims = ()
+        query_entries: list[tuple[str, list[str]]] = []
+        seen_queries: dict[str, int] = {}
+        for raw_claim in claims:
+            query = build_claim_search_query(raw_claim)
+            if not query:
+                continue
+            key = query.casefold()
+            claim_id = _claim_id(raw_claim)
+            if key in seen_queries:
+                if claim_id:
+                    origin_ids = query_entries[seen_queries[key]][1]
+                    if claim_id not in origin_ids:
+                        origin_ids.append(claim_id)
+                continue
+            seen_queries[key] = len(query_entries)
+            query_entries.append((query, [claim_id] if claim_id else []))
+
+        if not query_entries:
+            return SearchResponse(
+                status="not_run",
+                provider=self.config.provider,
+                message="No usable claims were available to search.",
+            )
+        if self.config.provider == "none":
+            return SearchResponse(
+                status="not_configured",
+                provider="none",
+                message="No search provider is configured.",
+            )
+
+        query_limit = max(1, min(self.config.max_claim_queries, self.config.max_results))
+        selected_queries = query_entries[:query_limit]
+        query_set_was_limited = len(selected_queries) < len(query_entries)
+        responses = [self.search(query) for query, _origin_ids in selected_queries]
+        successful = [response for response in responses if response.status == "complete"]
+
+        results: list[SearchResult] = []
+        index_by_url: dict[str, int] = {}
+        for response, (_query, origin_ids) in zip(responses, selected_queries):
+            if response.status != "complete":
+                continue
+            for result in response.results:
+                url_key = result.url.casefold().rstrip("/")
+                if url_key in index_by_url:
+                    existing = results[index_by_url[url_key]]
+                    existing.claim_ids = _union_claim_ids(existing.claim_ids, origin_ids)
+                    continue
+                if len(results) >= self.config.max_results:
+                    continue
+                tagged = result.model_copy(update={"claim_ids": list(origin_ids)})
+                index_by_url[url_key] = len(results)
+                results.append(tagged)
+
+        if len(successful) == len(responses) and not query_set_was_limited:
+            status = "complete"
+            message = None
+        elif successful:
+            status = "partial"
+            message = "Search completed for only part of the available claim queries."
+        elif any(response.status == "failed" for response in responses):
+            status = "failed"
+            message = "Claim search failed."
+        elif any(response.status == "unavailable" for response in responses):
+            status = "unavailable"
+            message = "Claim search is unavailable or not configured."
+        else:
+            status = "not_configured"
+            message = "No search provider is configured."
+
+        return SearchResponse(
+            status=status,
+            provider=self.config.provider,
+            results=results[: self.config.max_results],
+            message=message,
+        )
 
     @staticmethod
     def _parse_result(item: Any) -> SearchResult | None:

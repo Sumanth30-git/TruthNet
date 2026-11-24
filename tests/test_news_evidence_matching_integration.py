@@ -13,6 +13,11 @@ from backend.schemas import (
 NOW = datetime(2026, 9, 24, 12, tzinfo=timezone.utc)
 
 
+def _source_applies(source, claim_id):
+    origin_ids = [item for item in source.claim_ids if item]
+    return (not origin_ids) or claim_id in origin_ids
+
+
 def _evidence_items(claims, sources):
     return [
         EvidenceItem(
@@ -30,10 +35,11 @@ def _evidence_items(claims, sources):
         )
         for claim in claims
         for source in sources
+        if _source_applies(source, claim.claim_id)
     ]
 
 
-def test_news_pipeline_matches_every_claim_source_pair_and_attaches_quality(monkeypatch: pytest.MonkeyPatch):
+def test_news_pipeline_matches_originating_claim_source_pairs_and_attaches_quality(monkeypatch: pytest.MonkeyPatch):
     from backend.pipelines import news_pipeline
 
     sources = [
@@ -44,6 +50,7 @@ def test_news_pipeline_matches_every_claim_source_pair_and_attaches_quality(monk
             publisher="Reuters",
             published_at="2026-09-24T08:00:00Z",
             retrieved_at=NOW,
+            claim_ids=["claim-1"],
         ),
         SearchResult(
             title="Other report",
@@ -51,13 +58,14 @@ def test_news_pipeline_matches_every_claim_source_pair_and_attaches_quality(monk
             snippet="A separate report with limited details.",
             publisher="Example",
             retrieved_at=NOW,
+            claim_ids=["claim-2"],
         ),
     ]
     monkeypatch.setenv("MODEL_INFERENCE_ENABLED", "false")
     monkeypatch.setattr(
         news_pipeline.news_search,
-        "search",
-        lambda _query: SearchResponse(status="complete", provider="mock", results=sources),
+        "search_claims",
+        lambda _claims: SearchResponse(status="complete", provider="mock", results=sources),
     )
     monkeypatch.setattr(
         news_pipeline.evidence_analysis,
@@ -79,14 +87,13 @@ def test_news_pipeline_matches_every_claim_source_pair_and_attaches_quality(monk
     )
 
     assert calls == [
-        ("claim-1", source.url)
-        for source in sources
-    ] + [
-        ("claim-2", source.url)
-        for source in sources
+        ("claim-1", "https://www.reuters.com/world/acme-launch"),
+        ("claim-2", "https://example.org/other"),
     ]
-    assert len(response.evidence) == 4
-    assert {item.claim_id for item in response.evidence} == {"claim-1", "claim-2"}
+    assert [(item.claim_id, item.source_url) for item in response.evidence] == [
+        ("claim-1", "https://www.reuters.com/world/acme-launch"),
+        ("claim-2", "https://example.org/other"),
+    ]
 
     matched = response.evidence[0]
     assert matched.evidence_quality is not None
@@ -96,6 +103,12 @@ def test_news_pipeline_matches_every_claim_source_pair_and_attaches_quality(monk
     assert matched.evidence_quality.freshness.value == "current"
     assert response.claims[0].context is not None
     assert response.claims[0].context.claim_id == "claim-1"
+    assert ("claim-1", "https://example.org/other") not in {
+        (item.claim_id, item.source_url) for item in response.evidence
+    }
+    assert ("claim-2", "https://www.reuters.com/world/acme-launch") not in {
+        (item.claim_id, item.source_url) for item in response.evidence
+    }
 
 
 def test_news_pipeline_preserves_not_assessed_matching_for_underspecified_claim(monkeypatch: pytest.MonkeyPatch):
@@ -110,8 +123,8 @@ def test_news_pipeline_preserves_not_assessed_matching_for_underspecified_claim(
     monkeypatch.setenv("MODEL_INFERENCE_ENABLED", "false")
     monkeypatch.setattr(
         news_pipeline.news_search,
-        "search",
-        lambda _query: SearchResponse(status="complete", provider="mock", results=[source]),
+        "search_claims",
+        lambda _claims: SearchResponse(status="complete", provider="mock", results=[source]),
     )
     monkeypatch.setattr(
         news_pipeline.evidence_analysis,

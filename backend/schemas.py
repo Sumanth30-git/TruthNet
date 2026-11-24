@@ -62,6 +62,31 @@ class EvidenceAnalysisStatus(str, Enum):
     NOT_RUN = "not_run"
 
 
+class EvidenceContentOrigin(str, Enum):
+    FETCHED_PAGE = "fetched_page"
+    SEARCH_SNIPPET = "search_snippet"
+    UNAVAILABLE = "unavailable"
+
+
+class SourceFetchStatus(str, Enum):
+    NOT_ATTEMPTED = "not_attempted"
+    NOT_SELECTED = "not_selected"
+    FETCHED = "fetched"
+    INVALID_URL = "invalid_url"
+    UNSAFE_HOST = "unsafe_host"
+    DNS_FAILED = "dns_failed"
+    TIMEOUT = "timeout"
+    HTTP_ERROR = "http_error"
+    REDIRECT_REJECTED = "redirect_rejected"
+    REDIRECT_LIMIT = "redirect_limit"
+    BODY_TOO_LARGE = "body_too_large"
+    UNSUPPORTED_CONTENT_TYPE = "unsupported_content_type"
+    EMPTY_CONTENT = "empty_content"
+    EXTRACTION_FAILED = "extraction_failed"
+    BUDGET_EXCEEDED = "budget_exceeded"
+    FAILED = "failed"
+
+
 class ClaimType(str, Enum):
     GENERAL_FACT = "general_fact"
     GOVERNMENT_ANNOUNCEMENT = "government_announcement"
@@ -369,6 +394,9 @@ class EvidenceItem(BaseModel):
     source_title: str | None = None
     source_url: str | None = None
     source_snippet: str | None = None
+    source_content_origin: EvidenceContentOrigin | None = None
+    source_fetch_status: SourceFetchStatus | None = None
+    source_final_url: str | None = None
     publisher: str | None = None
     published_at: str | None = None
     retrieved_at: datetime | None = None
@@ -408,6 +436,7 @@ class SearchResult(BaseModel):
     publisher: str | None = None
     published_at: str | None = None
     retrieved_at: datetime
+    claim_ids: list[str] = Field(default_factory=list)
 
 
 class SearchResponse(BaseModel):

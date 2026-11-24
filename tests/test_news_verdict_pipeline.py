@@ -172,7 +172,7 @@ def _configure_pipeline(
         )
         return decision
 
-    monkeypatch.setattr(news_pipeline.news_search, "search", fake_search)
+    monkeypatch.setattr(news_pipeline.news_search, "search_claims", lambda _claims: fake_search(ONE_CLAIM))
     monkeypatch.setattr(news_pipeline.evidence_analysis, "analyze", fake_analyze)
     monkeypatch.setattr(news_pipeline, "evidence_aggregation", aggregation)
     monkeypatch.setattr(news_pipeline, "decide_news_verdict", fake_decide)
@@ -232,6 +232,9 @@ def test_pipeline_applies_inconclusive(monkeypatch: pytest.MonkeyPatch) -> None:
     assert response.uncertainty == Uncertainty.HIGH
     assert response.evidence_summaries == summaries
     assert len(response.evidence) == 1
+    assert "No calibrated evidence fusion has run." not in response.limitations
+    assert "Evidence fusion has not run, so the final verdict remains inconclusive." not in response.limitations
+    assert any("not calibrated probabilities" in item for item in response.limitations)
 
 
 def test_pipeline_aggregation_failure_remains_inconclusive(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -31,11 +31,13 @@ def create_default_registry() -> ModelRegistry:
     from backend.models.ai_image_model import AIImageBaselineAdapter
     from backend.models.deepfake_model import DeepfakeBaselineAdapter
     from backend.models.fake_news_model import FakeNewsBaselineAdapter
+    from backend.services.evidence_analysis import evidence_analysis
 
     default_registry = ModelRegistry()
     default_registry.register("fake_news_baseline", FakeNewsBaselineAdapter())
     default_registry.register("ai_image_baseline", AIImageBaselineAdapter())
     default_registry.register("deepfake_baseline", DeepfakeBaselineAdapter())
+    default_registry.register("news_nli", evidence_analysis.analyzer.adapter)
     return default_registry
 
 

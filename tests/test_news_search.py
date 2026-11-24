@@ -4,7 +4,8 @@ from typing import Any
 import pytest
 import httpx
 
-from backend.services.news_search import SearchConfig, SearchService, TavilySearchProvider
+from backend.schemas import Claim, ClaimContext, ClaimNumber, EntityMention, EntityType
+from backend.services.news_search import SearchConfig, SearchService, TavilySearchProvider, build_claim_search_query
 
 
 class FakeProvider:
@@ -178,3 +179,160 @@ def test_tavily_selected_from_environment_without_key_is_unavailable(monkeypatch
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     response = SearchService(SearchConfig.from_env()).search("query")
     assert response.provider == "tavily" and response.status == "unavailable"
+
+
+def test_claim_query_preserves_structured_subject_entity_location_time_and_numbers():
+    claim = Claim(
+        claim_id="claim-1",
+        text="NASA expects 7.1% growth in Florida in 2025.",
+        context=ClaimContext(
+            claim_id="claim-1",
+            factual_statement="NASA expects 7.1% growth in Florida in 2025.",
+            subject="NASA",
+            event="growth",
+            location="Florida",
+            time_reference="2025",
+            numerical_values=[ClaimNumber(raw_text="7.1%", value=7.1, unit="percent")],
+            entity_mentions=[EntityMention(text="NASA", entity_type=EntityType.ORGANIZATION, start=0, end=4)],
+        ),
+    )
+
+    query = build_claim_search_query(claim)
+
+    assert query is not None
+    assert all(term in query for term in ("NASA", "growth", "Florida", "2025", "7.1%", "expects"))
+
+
+class RoutingProvider:
+    name = "fake"
+
+    def __init__(self, routes: dict[str, list[dict[str, str]]]):
+        self.routes = routes
+        self.calls: list[tuple[str, float, int]] = []
+
+    def search(self, query: str, *, timeout_seconds: float, max_results: int) -> Sequence[Mapping[str, Any]]:
+        self.calls.append((query, timeout_seconds, max_results))
+        for marker, rows in self.routes.items():
+            if marker in query:
+                return rows
+        return []
+
+
+def test_search_claims_queries_multiple_claims_and_preserves_result_provenance():
+    provider = FakeProvider([{
+        "title": "Report",
+        "url": "https://example.org/story",
+        "snippet": "Source excerpt",
+        "publisher": "Example News",
+        "published_at": "2026-10-01",
+    }])
+    service = _service(provider, maximum=5)
+    claims = [
+        Claim(claim_id="claim-1", text="NASA launched the mission in Florida in 2025.", context=ClaimContext(
+            claim_id="claim-1", factual_statement="NASA launched the mission in Florida in 2025.",
+            subject="NASA", location="Florida", time_reference="2025",
+        )),
+        Claim(claim_id="claim-2", text="SpaceX announced a new flight from California in 2026.", context=ClaimContext(
+            claim_id="claim-2", factual_statement="SpaceX announced a new flight from California in 2026.",
+            subject="SpaceX", location="California", time_reference="2026",
+        )),
+    ]
+
+    response = service.search_claims(claims)
+
+    assert response.status == "complete"
+    assert len(provider.calls) == 2
+    assert "NASA" in provider.calls[0][0] and "Florida" in provider.calls[0][0] and "2025" in provider.calls[0][0]
+    assert "SpaceX" in provider.calls[1][0] and "California" in provider.calls[1][0] and "2026" in provider.calls[1][0]
+    assert len(response.results) == 1
+    result = response.results[0]
+    assert (result.title, result.url, result.snippet, result.publisher, result.published_at) == (
+        "Report", "https://example.org/story", "Source excerpt", "Example News", "2026-10-01"
+    )
+    assert result.claim_ids == ["claim-1", "claim-2"]
+
+
+def test_search_claims_retains_originating_claim_id_for_distinct_sources():
+    provider = RoutingProvider({
+        "NASA": [{
+            "title": "NASA report",
+            "url": "https://nasa.example/florida-2025",
+            "snippet": "NASA launched the mission in Florida in 2025.",
+            "publisher": "NASA News",
+        }],
+        "SpaceX": [{
+            "title": "SpaceX report",
+            "url": "https://spacex.example/california-2026",
+            "snippet": "SpaceX announced a new flight from California in 2026.",
+            "publisher": "SpaceX News",
+        }],
+    })
+    claims = [
+        Claim(claim_id="claim-1", text="NASA launched the mission in Florida in 2025.", context=ClaimContext(
+            claim_id="claim-1", factual_statement="NASA launched the mission in Florida in 2025.",
+            subject="NASA", location="Florida", time_reference="2025",
+        )),
+        Claim(claim_id="claim-2", text="SpaceX announced a new flight from California in 2026.", context=ClaimContext(
+            claim_id="claim-2", factual_statement="SpaceX announced a new flight from California in 2026.",
+            subject="SpaceX", location="California", time_reference="2026",
+        )),
+    ]
+
+    response = _service(provider).search_claims(claims)
+
+    assert response.status == "complete"
+    assert len(provider.calls) == 2
+    assert [(result.url, result.claim_ids) for result in response.results] == [
+        ("https://nasa.example/florida-2025", ["claim-1"]),
+        ("https://spacex.example/california-2026", ["claim-2"]),
+    ]
+    by_claim = {claim_id: result.url for result in response.results for claim_id in result.claim_ids}
+    assert by_claim == {
+        "claim-1": "https://nasa.example/florida-2025",
+        "claim-2": "https://spacex.example/california-2026",
+    }
+
+
+def test_search_claims_handles_no_usable_claims_without_provider_call():
+    provider = FakeProvider([])
+    service = _service(provider)
+
+    response = service.search_claims([
+        {"claim_id": "missing-text"},
+        Claim(claim_id="empty", text="  "),
+    ])
+
+    assert response.status == "not_run"
+    assert "No usable claims" in response.message
+    assert provider.calls == []
+    assert service.search_claims(None).status == "not_run"
+
+
+def test_search_claims_preserves_disabled_and_provider_failure_states(caplog):
+    disabled_provider = FakeProvider([])
+    disabled = SearchService(SearchConfig(), disabled_provider).search_claims([
+        Claim(claim_id="claim-1", text="NASA launched a mission.")
+    ])
+    assert disabled.status == "not_configured"
+    assert disabled_provider.calls == []
+
+    failing_provider = FakeProvider(error=ConnectionError("provider-secret"))
+    failed = _service(failing_provider).search_claims([
+        Claim(claim_id="claim-1", text="NASA launched a mission.")
+    ])
+    assert failed.status == "unavailable"
+    assert "provider-secret" not in str(failed)
+    assert "provider-secret" not in caplog.text
+
+
+def test_search_claims_bounds_query_count_and_total_results():
+    provider = FakeProvider([{"title": str(index), "url": f"https://example.org/{index}"} for index in range(4)])
+    service = _service(provider, maximum=2)
+    claims = [Claim(claim_id=f"claim-{index}", text=f"Organization {index} announced a project.") for index in range(4)]
+
+    response = service.search_claims(claims)
+
+    assert response.status == "partial"
+    assert len(provider.calls) == 2
+    assert len(response.results) == 2
+    assert all(call[2] == 2 for call in provider.calls)

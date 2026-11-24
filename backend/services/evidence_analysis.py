@@ -8,20 +8,23 @@ injected later without changing the News pipeline contract.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Protocol
 from urllib.parse import urlparse
 
 from backend.schemas import (
     Claim,
     EvidenceAnalysisStatus,
+    EvidenceContentOrigin,
     EvidenceItem,
     EvidenceRelevance,
     EvidenceStance,
     NLIEvidenceSignal,
     SearchResult,
     SignalStatus,
+    SourceFetchStatus,
 )
+from backend.services.news_source_retrieval import SourceRetrievalResult, source_url_key
 
 
 class EvidenceAnalyzer(Protocol):
@@ -133,6 +136,13 @@ class NLIEvidenceAnalyzer:
         )
 
 
+def _source_applies_to_claim(source: SearchResult, claim_id: str) -> bool:
+    origin_ids = [item for item in source.claim_ids if isinstance(item, str) and item]
+    if not origin_ids:
+        return True
+    return claim_id in origin_ids
+
+
 def extract_candidate_claims(text: object) -> list[Claim]:
     """Split input into simple sentence candidates without semantic claim extraction."""
     if not isinstance(text, str) or not text.strip():
@@ -149,6 +159,8 @@ class EvidenceAnalysisService:
         self,
         claims: Sequence[Claim],
         sources: Sequence[SearchResult],
+        *,
+        retrieved_sources: Mapping[str, SourceRetrievalResult] | None = None,
     ) -> tuple[list[EvidenceItem], EvidenceAnalysisStatus]:
         if not sources:
             return [], EvidenceAnalysisStatus.NO_SOURCES
@@ -177,7 +189,27 @@ class EvidenceAnalysisService:
                     ))
                     statuses.append(EvidenceAnalysisStatus.UNAVAILABLE)
                     continue
+                if not _source_applies_to_claim(source, claim.claim_id):
+                    continue
                 content = source.snippet if isinstance(source.snippet, str) else ""
+                retrieval = None
+                key = source_url_key(source.url)
+                if retrieved_sources is not None and key is not None:
+                    retrieval = retrieved_sources.get(key)
+                if retrieval is not None and retrieval.status == SourceFetchStatus.FETCHED and isinstance(retrieval.content, str) and retrieval.content.strip():
+                    content = retrieval.content
+                    content_origin = EvidenceContentOrigin.FETCHED_PAGE
+                    fetch_status = retrieval.status
+                else:
+                    content_origin = (
+                        EvidenceContentOrigin.SEARCH_SNIPPET
+                        if isinstance(content, str) and content.strip()
+                        else EvidenceContentOrigin.UNAVAILABLE
+                    )
+                    fetch_status = (
+                        retrieval.status if retrieval is not None else SourceFetchStatus.NOT_ATTEMPTED
+                    )
+                final_url = retrieval.final_url if retrieval is not None else None
                 try:
                     assessment = self.analyzer.analyze(claim.text, content)
                     status = assessment.status
@@ -189,7 +221,10 @@ class EvidenceAnalysisService:
                         claim=claim.text,
                         source_title=source.title,
                         source_url=source.url,
-                        source_snippet=source.snippet,
+                        source_snippet=content or None,
+                        source_content_origin=content_origin,
+                        source_fetch_status=fetch_status,
+                        source_final_url=final_url,
                         publisher=source.publisher,
                         published_at=source.published_at,
                         retrieved_at=source.retrieved_at,
@@ -210,7 +245,10 @@ class EvidenceAnalysisService:
                         claim=claim.text,
                         source_title=source.title,
                         source_url=source.url,
-                        source_snippet=source.snippet,
+                        source_snippet=content or None,
+                        source_content_origin=content_origin,
+                        source_fetch_status=fetch_status,
+                        source_final_url=final_url,
                         publisher=source.publisher,
                         published_at=source.published_at,
                         retrieved_at=source.retrieved_at,

@@ -4,12 +4,14 @@ import pytest
 
 from backend.schemas import (
     EvidenceAnalysisStatus,
+    EvidenceContentOrigin,
     EvidenceStance,
     NLIEvidenceSignal,
     NLIProbabilities,
     SearchResponse,
     SearchResult,
     SignalStatus,
+    SourceFetchStatus,
 )
 from backend.services.evidence_analysis import EvidenceAnalysisService, NLIEvidenceAnalyzer
 
@@ -56,10 +58,11 @@ def _configure_pipeline(monkeypatch: pytest.MonkeyPatch, adapter: FakeNLIAdapter
     from backend.pipelines import news_pipeline
 
     monkeypatch.setenv("MODEL_INFERENCE_ENABLED", "false")
+    monkeypatch.setenv("NEWS_SOURCE_RETRIEVAL_ENABLED", "false")
     monkeypatch.setattr(
         news_pipeline.news_search,
-        "search",
-        lambda _query: SearchResponse(status="complete", provider="mock", results=[SOURCE]),
+        "search_claims",
+        lambda _claims: SearchResponse(status="complete", provider="mock", results=[SOURCE]),
     )
     monkeypatch.setattr(
         news_pipeline,
@@ -95,6 +98,8 @@ def test_news_pipeline_preserves_existing_nli_signal_and_step_2a_quality(
     item = response.evidence[0]
     assert item.claim_id == "claim-1"
     assert item.source_url == SOURCE.url
+    assert item.source_content_origin == EvidenceContentOrigin.SEARCH_SNIPPET
+    assert item.source_fetch_status == SourceFetchStatus.NOT_ATTEMPTED
     assert item.stance == expected_stance
     assert item.nli_signal is not None
     assert item.nli_signal.prediction == label
@@ -129,6 +134,8 @@ def test_news_pipeline_keeps_failed_nli_conservative_and_retains_step_2a_quality
     item = response.evidence[0]
     assert item.claim_id == "claim-1"
     assert item.source_url == SOURCE.url
+    assert item.source_content_origin == EvidenceContentOrigin.SEARCH_SNIPPET
+    assert item.source_fetch_status == SourceFetchStatus.NOT_ATTEMPTED
     assert item.stance == EvidenceStance.INSUFFICIENT
     assert item.analysis_status == EvidenceAnalysisStatus.UNAVAILABLE
     assert item.nli_signal is not None

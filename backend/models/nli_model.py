@@ -12,7 +12,15 @@ from backend.config import (
     news_nli_max_tokens,
     news_nli_model_id,
 )
-from backend.schemas import NLIEvidenceSignal, NLIProbabilities, SignalStatus
+from backend.schemas import (
+    ContentType,
+    ModelInfo,
+    ModelLoadStatus,
+    ModelReadiness,
+    NLIEvidenceSignal,
+    NLIProbabilities,
+    SignalStatus,
+)
 
 
 class NLIModelAdapter:
@@ -50,6 +58,33 @@ class NLIModelAdapter:
     @property
     def device(self) -> str:
         return self._device
+
+    @property
+    def metadata(self) -> ModelInfo:
+        return ModelInfo(
+            model_id=self.model_id,
+            model_version=self.model_version,
+            content_type=ContentType.TEXT,
+        )
+
+    @property
+    def load_status(self) -> ModelLoadStatus:
+        if self.is_loaded:
+            return ModelLoadStatus.LOADED
+        if self._load_error:
+            return ModelLoadStatus.FAILED
+        return ModelLoadStatus.NOT_LOADED
+
+    @property
+    def load_message(self) -> str | None:
+        return "NLI model is unavailable." if self._load_error else None
+
+    def readiness(self) -> ModelReadiness:
+        return ModelReadiness(
+            **self.metadata.model_dump(),
+            status=self.load_status,
+            message=self.load_message,
+        )
 
     def load(self) -> None:
         if not model_inference_enabled():

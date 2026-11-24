@@ -24,11 +24,31 @@ _TRUTHY_ENV = {"1", "true", "yes", "on"}
 DEFAULT_NEWS_NLI_MODEL_ID = "cross-encoder/nli-deberta-v3-base"
 DEFAULT_NEWS_NLI_MAX_TOKENS = 512
 DEFAULT_NEWS_NLI_MAX_SOURCE_CHARS = 6_000
+NEWS_SOURCE_RETRIEVAL_MAX_SOURCES = 3
+NEWS_SOURCE_RETRIEVAL_TIMEOUT_SECONDS = 5.0
+NEWS_SOURCE_RETRIEVAL_BUDGET_SECONDS = 15.0
+NEWS_SOURCE_RETRIEVAL_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+NEWS_SOURCE_RETRIEVAL_MAX_TEXT_CHARS = 50_000
+NEWS_SOURCE_RETRIEVAL_MAX_REDIRECTS = 2
+DEFAULT_CLAIM_UNDERSTANDING_SPACY_MODEL = "en_core_web_sm"
 
 
 def model_inference_enabled() -> bool:
     """Read MODEL_INFERENCE_ENABLED at call time. Default is off (safe for tests)."""
     return os.getenv("MODEL_INFERENCE_ENABLED", "false").strip().lower() in _TRUTHY_ENV
+
+
+def claim_understanding_spacy_enabled() -> bool:
+    """Read the experimental spaCy gate at call time. Its default is off."""
+    return os.getenv("CLAIM_UNDERSTANDING_SPACY_ENABLED", "false").strip().lower() in _TRUTHY_ENV
+
+
+def claim_understanding_spacy_model() -> str:
+    """Read the spaCy model name without importing spaCy or loading a model."""
+    return (
+        os.getenv("CLAIM_UNDERSTANDING_SPACY_MODEL", DEFAULT_CLAIM_UNDERSTANDING_SPACY_MODEL).strip()
+        or DEFAULT_CLAIM_UNDERSTANDING_SPACY_MODEL
+    )
 
 
 def news_nli_model_id() -> str:
@@ -52,3 +72,8 @@ def news_nli_max_source_chars() -> int:
         return value if 256 <= value <= 20_000 else DEFAULT_NEWS_NLI_MAX_SOURCE_CHARS
     except ValueError:
         return DEFAULT_NEWS_NLI_MAX_SOURCE_CHARS
+
+
+def news_source_retrieval_enabled() -> bool:
+    """Read the News source-page retrieval gate at call time; default is off."""
+    return os.getenv("NEWS_SOURCE_RETRIEVAL_ENABLED", "false").strip().lower() in _TRUTHY_ENV

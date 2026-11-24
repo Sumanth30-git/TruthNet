@@ -79,6 +79,9 @@ def test_news_flag_off_returns_not_run_without_loading_model(monkeypatch: pytest
     assert response.status_code == 200
     assert body["verdict"] == "inconclusive"
     assert body["confidence"] is None
+    assert body["claims"][0]["text"] == "A sample news claim."
+    assert body["claims"][0]["extraction_method"] == "deterministic_claim_understanding"
+    assert body["claims"][0]["context"]["claim_id"] == body["claims"][0]["claim_id"]
     assert signal["model_id"] == NEWS_MODEL_ID
     assert signal["status"] == "not_run"
     assert signal["prediction"] == "not_assessed"

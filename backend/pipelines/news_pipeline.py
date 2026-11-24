@@ -1,26 +1,28 @@
 import logging
 from typing import Any
 
-from backend.config import model_inference_enabled
+from backend.config import model_inference_enabled, news_source_retrieval_enabled
 from backend.fusion.decision import decide_news_verdict, inconclusive_result
 from backend.models.base import BaseModelAdapter
 from backend.models.registry import ModelRegistry, registry
-from backend.schemas import AnalysisResponse, ContentType, EvidenceQuality, SignalResult, SignalStatus
+from backend.schemas import AnalysisResponse, Claim, ContentType, EvidenceQuality, SignalResult, SignalStatus
 from backend.schemas import EvidenceAnalysisStatus
-from backend.services.evidence_analysis import evidence_analysis, extract_candidate_claims
+from backend.services.evidence_analysis import evidence_analysis
 from backend.services.claim_understanding import claim_understanding
 from backend.services.evidence_aggregation import evidence_aggregation
 from backend.services.evidence_matching import evidence_matching
 from backend.services.news_search import news_search
+from backend.services.news_source_retrieval import news_source_retrieval
+from backend.services.numerical_comparison import numerical_comparison
 from backend.services.source_quality import source_quality
 
 logger = logging.getLogger(__name__)
 
 NEWS_LIMITATIONS = [
-    "This is a single text-classifier signal, not live claim verification.",
-    "Claims are simple sentence candidates; NLI assesses source-text/claim relation, not factual truth or source credibility.",
-    "Evidence fusion has not run, so the final verdict remains inconclusive.",
-    "Raw model scores are not calibrated probabilities or factual certainty.",
+    "The legacy News classifier is an auxiliary signal; it does not determine the evidence-based News verdict.",
+    "Claims are deterministic sentence and clearly independent clause candidates with text-derived context; NLI assesses source-text/claim relation, not factual truth or source credibility.",
+    "Search, retrieval, NLI, and claim-level evidence aggregation can be incomplete or unavailable; verdicts remain fail-closed.",
+    "Raw model scores and evidence weights are not calibrated probabilities of factual truth.",
 ]
 
 
@@ -54,6 +56,25 @@ def _unavailable_claim_ids(response: AnalysisResponse) -> frozenset[str]:
     )
 
 
+def _extract_news_claims(text: str) -> list[Claim]:
+    """Build atomic claim candidates and their structured context before search."""
+    try:
+        claims = claim_understanding.extract_claims(text)
+        if not claims:
+            return []
+        contexts = claim_understanding.understand_claims(claims)
+        expected_ids = [claim.claim_id for claim in claims]
+        actual_ids = [context.claim_id for context in contexts]
+        if len(set(expected_ids)) != len(expected_ids) or actual_ids != expected_ids:
+            raise ValueError("Claim understanding did not return one matching context per claim.")
+        for claim, context in zip(claims, contexts):
+            claim.context = context
+        return claims
+    except Exception:
+        logger.warning("News claim understanding failed; claims are unavailable", exc_info=True)
+        return []
+
+
 def _apply_news_verdict(response: AnalysisResponse, *, aggregation_succeeded: bool) -> AnalysisResponse:
     """Apply the existing News decision policy without recalculating evidence."""
 
@@ -71,8 +92,6 @@ def _apply_news_verdict(response: AnalysisResponse, *, aggregation_succeeded: bo
     response.confidence = decision.confidence
     response.uncertainty = decision.uncertainty
     response.message = decision.reason
-    stale_limitation = "Evidence fusion has not run, so the final verdict remains inconclusive."
-    response.limitations = [item for item in response.limitations if item != stale_limitation]
     if decision.reason not in response.limitations:
         response.limitations.append(decision.reason)
     return response
@@ -88,12 +107,7 @@ def _attach_evidence_quality(response: AnalysisResponse) -> None:
     if response.search is None:
         return
 
-    claims_by_id = {claim.claim_id: claim for claim in response.claims}
-    contexts = claim_understanding.understand_claims(response.claims)
-    for context in contexts:
-        claim = claims_by_id.get(context.claim_id)
-        if claim is not None:
-            claim.context = context
+    contexts = [claim.context for claim in response.claims if claim.context is not None]
 
     items_by_pair: dict[tuple[str | None, str | None], list] = {}
     for item in response.evidence:
@@ -101,6 +115,9 @@ def _attach_evidence_quality(response: AnalysisResponse) -> None:
 
     for context in contexts:
         for source in response.search.results:
+            origin_ids = [claim_id for claim_id in source.claim_ids if claim_id]
+            if origin_ids and context.claim_id not in origin_ids:
+                continue
             items = items_by_pair.get((context.claim_id, source.url), [])
             try:
                 profile = source_quality.profile(source, claim_context=context)
@@ -114,11 +131,14 @@ def _attach_evidence_quality(response: AnalysisResponse) -> None:
 
             for item in items:
                 existing_quality = item.evidence_quality
+                numerical_check = numerical_comparison.compare(context, item.source_snippet)
                 item.evidence_quality = EvidenceQuality(
                     source_profile=profile,
                     match=match,
                     numerical_check=(
-                        existing_quality.numerical_check if existing_quality is not None else None
+                        numerical_check
+                        if numerical_check is not None
+                        else existing_quality.numerical_check if existing_quality is not None else None
                     ),
                     freshness=freshness,
                 )
@@ -151,21 +171,38 @@ def analyze_news(text: str, model_registry: ModelRegistry = registry) -> Analysi
         model_versions=[adapter.metadata],
         limitations=NEWS_LIMITATIONS,
     )
-    # Sentence segmentation creates candidate claims, not semantically verified claims.
-    response.claims = extract_candidate_claims(text)
+    # Claim understanding creates deterministic sentence/clause candidates and
+    # attaches their text-derived context before search or evidence processing.
+    response.claims = _extract_news_claims(text)
     aggregation_succeeded = False
     try:
-        response.search = news_search.search(text)
+        response.search = news_search.search_claims(response.claims)
     except Exception:
         logger.warning("News search failed")
         response.search = None
         response.evidence_analysis_status = EvidenceAnalysisStatus.UNAVAILABLE
         return _apply_news_verdict(response, aggregation_succeeded=False)
 
-    if response.search.status == "complete":
-        response.evidence, response.evidence_analysis_status = evidence_analysis.analyze(
-            response.claims, response.search.results
-        )
+    if response.search.status in {"complete", "partial"}:
+        retrieved_sources = None
+        if news_source_retrieval_enabled():
+            try:
+                retrieved_sources = news_source_retrieval.retrieve(response.search.results)
+            except Exception:
+                logger.warning("News source retrieval failed")
+                retrieved_sources = news_source_retrieval.failed_results(response.search.results)
+        if retrieved_sources is None:
+            response.evidence, response.evidence_analysis_status = evidence_analysis.analyze(
+                response.claims, response.search.results
+            )
+        else:
+            response.evidence, response.evidence_analysis_status = evidence_analysis.analyze(
+                response.claims,
+                response.search.results,
+                retrieved_sources=retrieved_sources,
+            )
+        if response.search.status == "partial":
+            response.evidence_analysis_status = EvidenceAnalysisStatus.PARTIAL
         _attach_evidence_quality(response)
         try:
             response.evidence = evidence_aggregation.prepare(response.evidence)

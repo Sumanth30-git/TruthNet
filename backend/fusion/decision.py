@@ -119,7 +119,7 @@ def inconclusive_result(
     model_versions: list[ModelInfo] | None = None,
     limitations: list[str] | None = None,
 ) -> AnalysisResponse:
-    """Safe default until a calibrated, validated fusion policy exists."""
+    """Create a safe response shell for the caller's decision policy."""
     return AnalysisResponse(
         verdict=Verdict.INCONCLUSIVE,
         confidence=None,
@@ -127,8 +127,8 @@ def inconclusive_result(
         signals=signals or [],
         model_versions=model_versions or [],
         limitations=[
-            "No calibrated evidence fusion has run.",
-            "A final result is intentionally not forced into authentic or fake.",
+            "Model and evidence scores are not calibrated probabilities of real-world truth.",
+            "A verdict is not proof of real-world truth, authenticity, or deliberate manipulation.",
             *(limitations or []),
         ],
         message=message,

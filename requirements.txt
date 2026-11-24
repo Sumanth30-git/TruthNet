@@ -5,5 +5,6 @@ Pillow==11.3.0
 opencv-python-headless==4.14.0.94
 torch==2.14.0
 transformers==4.57.6
+spacy==3.8.16
 pytest==9.0.2
 httpx==0.28.1

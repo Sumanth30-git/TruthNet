@@ -10,9 +10,20 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from datetime import date
+from threading import Lock
+from time import perf_counter
 from typing import Protocol
 
-from backend.schemas import Claim, ClaimContext, ClaimNumber, ClaimType, ClaimUnderstandingMetadata
+from backend.config import claim_understanding_spacy_enabled, claim_understanding_spacy_model
+from backend.schemas import (
+    Claim,
+    ClaimContext,
+    ClaimNumber,
+    ClaimType,
+    ClaimUnderstandingMetadata,
+    EntityMention,
+    EntityType,
+)
 
 
 _NUMBER_PATTERN = r"(?:\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)"
@@ -123,11 +134,10 @@ _DAY_MONTH_YEAR_RE = re.compile(
 _YEAR_RE = re.compile(r"\b(?:19\d{2}|20\d{2})\b")
 
 _LOCATION_PREPOSITION_RE = re.compile(
-    r"\b(?:in|at|near|within|across)\s+(?:the\s+)?"
-    r"(?P<location>[A-Z][A-Za-z'’\-]*(?:\s+[A-Z][A-Za-z'’\-]*){0,3})"
+    r"\b(?:in|at|near|within|across|from)\s+(?:the\s+)?"
+    r"(?P<location>[A-Z][A-Za-z'\u2019\-]*(?:\s+[A-Z][A-Za-z'\u2019\-]*){0,3})"
 )
-_LOCATION_POSSESSIVE_RE = re.compile(r"\b(?P<location>[A-Z][A-Za-z'’\-]*(?:\s+[A-Z][A-Za-z'’\-]*){0,3})(?:'s|’s)\b")
-_LOCATION_BASED_RE = re.compile(r"\b(?P<location>[A-Z][A-Za-z'’\-]*(?:\s+[A-Z][A-Za-z'’\-]*){0,3})-based\b")
+_LOCATION_BASED_RE = re.compile(r"\b(?P<location>[A-Z][A-Za-z'\u2019\-]*(?:\s+[A-Z][A-Za-z'\u2019\-]*){0,3})-based\b")
 _NON_LOCATION_TOKENS = frozenset({*{month.title() for month in _MONTHS}, "Today", "Yesterday", "Current", "Latest"})
 
 _FINANCIAL_PRICE_RE = re.compile(
@@ -351,11 +361,18 @@ def _is_plausible_location(candidate: str) -> bool:
 
 
 def _extract_location(text: str) -> str | None:
-    for pattern in (_LOCATION_PREPOSITION_RE, _LOCATION_POSSESSIVE_RE, _LOCATION_BASED_RE):
+    for pattern in (_LOCATION_PREPOSITION_RE, _LOCATION_BASED_RE):
         match = pattern.search(text)
         if not match:
             continue
         candidate = match.group("location").strip(" ,;:.")
+        # A possessive name can be consumed either as part of the candidate
+        # ("India's") or as the suffix immediately after it ("India's").
+        # Neither form is evidence that the name is a claim location.
+        if re.search(r"(?:'s|\u2019s)$", candidate, re.IGNORECASE) or re.match(
+            r"(?:'s|\u2019s)\b", text[match.end():], re.IGNORECASE
+        ):
+            continue
         if _is_plausible_location(candidate):
             return candidate
     return None
@@ -585,20 +602,202 @@ class DeterministicClaimUnderstandingAdapter:
         return understand_claims(claims)
 
 
+class SpacyClaimUnderstandingAdapter:
+    """Opt-in spaCy entity extraction layered over deterministic claim parsing."""
+
+    _ENTITY_TYPES = {
+        "PERSON": EntityType.PERSON,
+        "ORG": EntityType.ORGANIZATION,
+        "GPE": EntityType.LOCATION,
+        "LOC": EntityType.LOCATION,
+        "FAC": EntityType.LOCATION,
+        "PRODUCT": EntityType.PRODUCT,
+        "EVENT": EntityType.EVENT,
+    }
+    _POSSESSIVE_SUFFIX_RE = re.compile(r"^(?:'s|’s)(?!\w)", re.IGNORECASE)
+    _POSSESSIVE_ENTITY_RE = re.compile(r"(?:'s|’s)$", re.IGNORECASE)
+
+    def __init__(self, model_name: str | None = None) -> None:
+        self.model_name = model_name or claim_understanding_spacy_model()
+        self._pipeline = None
+        self._model_version: str | None = None
+        self._load_failed = False
+        self._load_lock = Lock()
+
+    def _load_pipeline(self):
+        """Import spaCy and load the configured model once, only when requested."""
+        if self._pipeline is not None:
+            return self._pipeline
+        if self._load_failed:
+            return None
+        with self._load_lock:
+            if self._pipeline is not None:
+                return self._pipeline
+            if self._load_failed:
+                return None
+            try:
+                import spacy
+
+                pipeline = spacy.load(self.model_name)
+                self._pipeline = pipeline
+                metadata = getattr(pipeline, "meta", {})
+                version = metadata.get("version") if isinstance(metadata, dict) else None
+                self._model_version = version if isinstance(version, str) and version else None
+            except Exception:
+                # Missing spaCy, a missing model, and load errors are all safe
+                # unavailable states. Never attempt a download or expose loader
+                # diagnostics through the analysis response.
+                self._load_failed = True
+            return self._pipeline
+
+    @classmethod
+    def _is_possessive_location(cls, text: str, start: int, end: int) -> bool:
+        mention = text[start:end]
+        return bool(
+            cls._POSSESSIVE_ENTITY_RE.search(mention)
+            or cls._POSSESSIVE_SUFFIX_RE.match(text[end:])
+        )
+
+    def _extract_entities(self, pipeline, text: str) -> list[EntityMention]:
+        document = pipeline(text)
+        entities: list[EntityMention] = []
+        for entity in getattr(document, "ents", ()):
+            entity_type = self._ENTITY_TYPES.get(getattr(entity, "label_", None))
+            if entity_type is None:
+                continue
+            try:
+                start = entity.start_char
+                end = entity.end_char
+            except AttributeError:
+                continue
+            if not isinstance(start, int) or not isinstance(end, int) or not 0 <= start < end <= len(text):
+                continue
+            mention_text = text[start:end]
+            if not mention_text.strip():
+                continue
+            if entity_type == EntityType.LOCATION and self._is_possessive_location(text, start, end):
+                continue
+            entities.append(EntityMention(
+                text=mention_text,
+                entity_type=entity_type,
+                start=start,
+                end=end,
+                normalized_text=mention_text.casefold(),
+                status="complete",
+            ))
+        return entities
+
+    @staticmethod
+    def _set_metadata(
+        context: ClaimContext,
+        *,
+        status: str,
+        model_id: str,
+        model_version: str | None = None,
+        reason: str | None = None,
+        inference_time_ms: float | None = None,
+    ) -> ClaimContext:
+        context.relations = []
+        context.understanding_metadata = ClaimUnderstandingMetadata(
+            method="spacy_claim_understanding",
+            status=status,
+            reason=reason,
+            model_id=model_id,
+            model_version=model_version,
+            inference_time_ms=inference_time_ms,
+        )
+        return context
+
+    def extract_claims(self, text: object) -> list[Claim]:
+        """Keep claim segmentation deterministic; spaCy is entity-only here."""
+        return extract_claims(text)
+
+    def understand_claim(self, claim: Claim | str, *, claim_id: str | None = None) -> ClaimContext:
+        context = understand_claim(claim, claim_id=claim_id)
+        text = claim.text if isinstance(claim, Claim) else claim
+        if not isinstance(text, str) or not text.strip():
+            return context
+
+        started = perf_counter()
+        pipeline = self._load_pipeline()
+        if pipeline is None:
+            context.entity_mentions = []
+            return self._set_metadata(
+                context,
+                status="unavailable",
+                model_id=self.model_name,
+                reason="spaCy or the configured model is unavailable.",
+                inference_time_ms=round((perf_counter() - started) * 1000, 2),
+            )
+
+        try:
+            entities = self._extract_entities(pipeline, text)
+        except Exception:
+            context.entity_mentions = []
+            return self._set_metadata(
+                context,
+                status="unavailable",
+                model_id=self.model_name,
+                model_version=self._model_version,
+                reason="spaCy entity extraction was unavailable.",
+                inference_time_ms=round((perf_counter() - started) * 1000, 2),
+            )
+
+        context.entity_mentions = entities
+        return self._set_metadata(
+            context,
+            status="complete",
+            model_id=self.model_name,
+            model_version=self._model_version,
+            inference_time_ms=round((perf_counter() - started) * 1000, 2),
+        )
+
+    def understand_claims(self, claims: Sequence[Claim] | str | object) -> list[ClaimContext]:
+        if isinstance(claims, str):
+            return [self.understand_claim(claim) for claim in self.extract_claims(claims)]
+        if not isinstance(claims, Sequence):
+            return []
+
+        contexts: list[ClaimContext] = []
+        for index, raw_claim in enumerate(claims, 1):
+            try:
+                claim = raw_claim if isinstance(raw_claim, Claim) else Claim.model_validate(raw_claim)
+            except Exception:
+                continue
+            contexts.append(self.understand_claim(claim, claim_id=f"claim-{index}"))
+        return contexts
+
+
 class ClaimUnderstandingService:
     """Small service boundary used by the news pipeline and focused unit tests."""
 
     def __init__(self, adapter: ClaimUnderstandingAdapter | None = None) -> None:
-        self._adapter = adapter or DeterministicClaimUnderstandingAdapter()
+        # Explicit adapter injection remains authoritative. The production
+        # singleton chooses between deterministic and spaCy adapters at call
+        # time so the opt-in flag is read dynamically and the default is stable.
+        self._injected_adapter = adapter
+        self._deterministic_adapter = DeterministicClaimUnderstandingAdapter()
+        self._spacy_adapter: SpacyClaimUnderstandingAdapter | None = None
+        self._spacy_adapter_lock = Lock()
+
+    def _adapter(self) -> ClaimUnderstandingAdapter:
+        if self._injected_adapter is not None:
+            return self._injected_adapter
+        if not claim_understanding_spacy_enabled():
+            return self._deterministic_adapter
+        with self._spacy_adapter_lock:
+            if self._spacy_adapter is None:
+                self._spacy_adapter = SpacyClaimUnderstandingAdapter()
+            return self._spacy_adapter
 
     def extract_claims(self, text: object) -> list[Claim]:
-        return self._adapter.extract_claims(text)
+        return self._adapter().extract_claims(text)
 
     def understand_claim(self, claim: Claim | str, *, claim_id: str | None = None) -> ClaimContext:
-        return self._adapter.understand_claim(claim, claim_id=claim_id)
+        return self._adapter().understand_claim(claim, claim_id=claim_id)
 
     def understand_claims(self, claims: Sequence[Claim] | str | object) -> list[ClaimContext]:
-        return self._adapter.understand_claims(claims)
+        return self._adapter().understand_claims(claims)
 
 
 claim_understanding = ClaimUnderstandingService()

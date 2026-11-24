@@ -1,7 +1,8 @@
 from datetime import datetime, timedelta, timezone
 
-from backend.schemas import ClaimContext, ClaimSourceRelevance, ClaimType, MatchStatus, SearchResult
+from backend.schemas import Claim, ClaimContext, ClaimSourceRelevance, ClaimType, MatchStatus, SearchResult
 from backend.services.evidence_matching import EvidenceMatchingConfig, EvidenceMatchingService
+from backend.services.claim_understanding import understand_claim
 
 
 NOW = datetime(2026, 9, 24, 12, tzinfo=timezone.utc)
@@ -60,6 +61,23 @@ def test_location_matching_handles_exact_broader_and_mismatch():
     assert exact.location_match == MatchStatus.MATCH
     assert broader.location_match == MatchStatus.PARTIAL_MATCH
     assert mismatch.location_match == MatchStatus.MISMATCH
+
+
+def test_possessive_text_alone_does_not_create_evidence_location_match_or_mismatch():
+    service = EvidenceMatchingService()
+    cases = [
+        "Moon's surface contains water ice.",
+        "Moon\u2019s surface contains water ice.",
+        "India's space programme has expanded significantly.",
+        "India\u2019s space programme has expanded significantly.",
+    ]
+
+    for text in cases:
+        context = understand_claim(Claim(claim_id="claim-1", text=text))
+        result = service.match(context, _source(text))
+
+        assert context.location is None
+        assert result.location_match == MatchStatus.NOT_APPLICABLE
 
 
 def test_time_sensitive_claims_distinguish_current_stale_and_unknown_sources():
